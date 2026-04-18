@@ -82,6 +82,7 @@
 
         // Grab the html for the markdown
         renderElement.innerHTML = DOMPurify.sanitize(marked(content || ''));
+        ensurePreviewCodeBlockControls();
 
         if (renderElement.classList.contains('hidden')) {
           renderElement.classList.remove('hidden');
@@ -656,6 +657,58 @@
   // ===== Preview-mode highlight (mutates #render text nodes) =====
   let previewOriginalHTML = null;
   let previewMarks = [];
+  let previewCodeWrapEnabled = false;
+
+  const createPreviewCodeWrapButton = () => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'preview-code-wrap-toggle';
+    button.setAttribute('aria-label', 'Toggle code wrapping');
+    button.innerHTML = '<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2 4H11" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M2 8H9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M2 12H11" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M10.5 6.5L13 8L10.5 9.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      previewCodeWrapEnabled = !previewCodeWrapEnabled;
+      syncPreviewCodeWrapState();
+    });
+    return button;
+  };
+
+  const syncPreviewCodeWrapState = () => {
+    document.body.classList.toggle('wordWrap', previewCodeWrapEnabled);
+    document.querySelectorAll('#render .preview-code-wrap-toggle').forEach((button) => {
+      button.classList.toggle('active', previewCodeWrapEnabled);
+      button.setAttribute('aria-pressed', previewCodeWrapEnabled ? 'true' : 'false');
+      button.title = previewCodeWrapEnabled ? 'Disable code wrapping' : 'Enable code wrapping';
+    });
+  };
+
+  const ensurePreviewCodeBlockControls = () => {
+    const renderElement = document.getElementById('render');
+    if (!renderElement) {
+      return;
+    }
+
+    renderElement.querySelectorAll('pre').forEach((preElement) => {
+      preElement.classList.add('preview-code-block');
+
+      let wrapper = preElement.parentElement;
+      if (!wrapper || !wrapper.classList.contains('preview-code-block-shell')) {
+        wrapper = document.createElement('div');
+        wrapper.className = 'preview-code-block-shell';
+        preElement.parentNode.insertBefore(wrapper, preElement);
+        wrapper.appendChild(preElement);
+      }
+
+      let button = wrapper.querySelector('.preview-code-wrap-toggle');
+      if (!button) {
+        button = createPreviewCodeWrapButton();
+        wrapper.appendChild(button);
+      }
+    });
+
+    syncPreviewCodeWrapState();
+  };
 
   const clearPreviewHighlights = () => {
     const r = document.getElementById('render');
@@ -663,6 +716,7 @@
     r.innerHTML = previewOriginalHTML;
     previewOriginalHTML = null;
     previewMarks = [];
+    ensurePreviewCodeBlockControls();
   };
 
   const renderPreviewHighlights = () => {
@@ -673,6 +727,7 @@
     } else {
       previewOriginalHTML = r.innerHTML;
     }
+    ensurePreviewCodeBlockControls();
     previewMarks = [];
     if (!searchState.query) return;
     const query = searchState.query;
@@ -685,7 +740,8 @@
     while ((n = walker.nextNode())) {
       if (!n.parentElement) continue;
       const tag = n.parentElement.tagName;
-      if (tag === 'SCRIPT' || tag === 'STYLE') continue;
+      if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'BUTTON' || tag === 'SVG') continue;
+      if (n.parentElement.closest('.preview-code-wrap-toggle')) continue;
       targets.push(n);
     }
     targets.forEach((textNode) => {

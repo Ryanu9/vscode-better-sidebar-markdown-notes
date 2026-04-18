@@ -132,6 +132,56 @@
   outline: 1px solid var(--vscode-editor-findMatchBorder, transparent);
 }
 
+#render .preview-code-block-shell {
+  position: relative;
+}
+
+#render pre.preview-code-block {
+  padding-top: 40px;
+}
+
+#render .preview-code-wrap-toggle {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 4px;
+  background: var(--vscode-editorWidget-background, rgba(0, 0, 0, 0.18));
+  color: var(--vscode-icon-foreground, var(--vscode-foreground));
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#render .preview-code-wrap-toggle:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.2));
+  border-color: var(--vscode-focusBorder, var(--vscode-input-border, transparent));
+}
+
+#render .preview-code-wrap-toggle.active {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border-color: var(--vscode-button-background);
+}
+
+#render .preview-code-wrap-toggle svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+
+body.wordWrap #render pre.preview-code-block,
+body.wordWrap #render pre.preview-code-block code {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
 html,
 body {
   height: 100%;

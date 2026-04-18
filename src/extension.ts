@@ -19,7 +19,13 @@ export function activate(context: vscode.ExtensionContext) {
   // context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(provider.updateStatusBar));
   // context.subscriptions.push(vscode.window.onDidChangeTextEditorSelection(provider.updateStatusBar));
 
-  context.subscriptions.push(vscode.window.registerWebviewViewProvider(SidebarMarkdownNotesProvider.viewId, provider));
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(SidebarMarkdownNotesProvider.viewId, provider, {
+      webviewOptions: {
+        retainContextWhenHidden: true
+      }
+    })
+  );
 
   // The command has been defined in the package.json file
   // Now provide the implementation of the command with registerCommand
