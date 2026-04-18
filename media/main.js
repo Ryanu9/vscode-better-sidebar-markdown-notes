@@ -1101,11 +1101,11 @@
           <div class="note-checkbox-container">
             <input type="checkbox" class="note-checkbox" data-index="${index}" ${browserSelectedNotes.has(index) ? 'checked' : ''} />
           </div>
-        </div>
-        <div class="note-actions">
-          <button class="delete-note-button" title="Delete note" data-index="${index}">
-            <span class="codicon codicon-trash"></span>
-          </button>
+          <div class="note-actions">
+            <button class="delete-note-button" title="Delete note" data-index="${index}">
+              <span class="codicon codicon-trash"></span>
+            </button>
+          </div>
         </div>
       `;
       

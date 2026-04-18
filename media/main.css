@@ -872,7 +872,7 @@ body {
   background: var(--vscode-list-inactiveSelectionBackground);
   border: 1px solid var(--vscode-input-border);
   border-radius: 4px;
-  padding: 12px;
+  padding: 6px 8px;
   cursor: pointer;
   transition: all 0.2s;
   position: relative;
@@ -880,7 +880,7 @@ body {
 
 /* Compact note items for Browse Notes modal */
 #note-browser-modal .note-item {
-  padding: var(--browse-note-item-padding);
+  padding: 4px 6px;
 }
 
 .note-item:hover {
@@ -898,7 +898,7 @@ body {
 
 .note-item-inner {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
 }
 
@@ -909,21 +909,22 @@ body {
 
 /* Bookmark container - top left position */
 .note-bookmark-container {
-  padding: 4px 0 0 4px;
+  padding: 0;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   flex-shrink: 0;
 }
 
 .note-checkbox-container {
-  padding: 8px 8px 0 0;
+  padding: 0;
   display: flex;
   align-items: center;
+  flex-shrink: 0;
 }
 
 /* Compact checkbox container for Browse Notes modal - right side */
 #note-browser-modal .note-checkbox-container {
-  padding: 4px 4px 0 0;
+  padding: 0;
 }
 
 .note-checkbox {
@@ -944,29 +945,27 @@ body {
   flex: 1;
   min-width: 0;
   cursor: pointer;
-  padding: 8px 8px 12px 8px;
+  padding: 2px 0;
 }
 
 /* Compact content padding for Browse Notes modal */
 #note-browser-modal .note-content {
-  padding: 4px 6px 6px 6px;
+  padding: 1px 0;
 }
 
-/* Note actions container (delete button at bottom right) */
+/* Note actions container (delete button inline at the right of inner row) */
 .note-actions {
   display: flex;
-  align-items: flex-end;
-  justify-content: flex-end;
+  align-items: center;
   gap: 4px;
-  padding: 0 8px 8px 0;
+  padding: 0;
   opacity: 0;
-  transition: opacity 0.2s;
+  transition: opacity 0.15s;
   flex-shrink: 0;
 }
 
 /* Compact actions for Browse Notes modal */
 #note-browser-modal .note-actions {
-  padding: 0 4px 4px 0;
   gap: 2px;
 }
 
@@ -1107,15 +1106,15 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-top: 8px;
+  margin-top: 4px;
   font-size: 11px;
   color: var(--vscode-descriptionForeground);
 }
 
 /* Compact meta for Browse Notes modal */
 #note-browser-modal .note-meta {
-  margin-top: 4px;
-  font-size: 10px;
+  margin-top: 2px;
+  font-size: 12px;
 }
 
 .note-length {
@@ -1623,8 +1622,8 @@ body {
 
 /* Compact filter select for Browse Notes modal */
 #note-browser-modal .bookmark-filter .filter-select {
-  padding: 2px 6px;
-  font-size: 10px;
+  padding: 3px 8px;
+  font-size: 12px;
 }
 
 .bookmark-filter .filter-select:hover {
