@@ -494,16 +494,18 @@
       case 'saveSuccess': {
         // Handle successful save
         const isAutoSave = message.isAutoSave;
-        // For both auto and manual saves show a bottom toast and avoid keeping top status message
-        setTimeout(() => {
-          try {
-            if (typeof showToast === 'function') {
-              showToast(isAutoSave ? 'Auto-saved' : 'Saved successfully', null, null, 2000);
+        // Only show toast for manual saves; auto-saves should be silent
+        if (!isAutoSave) {
+          setTimeout(() => {
+            try {
+              if (typeof showToast === 'function') {
+                showToast('Saved successfully', null, null, 2000);
+              }
+            } catch (err) {
+              console.warn('[SaveSuccess] Toast failed:', err);
             }
-          } catch (err) {
-            console.warn('[SaveSuccess] Toast failed:', err);
-          }
-        }, 0);
+          }, 0);
+        }
 
         // Clear any top save status to avoid duplicate messages
         try {
@@ -988,6 +990,18 @@
 
     // Notify the extension so it can update view/title icon (filled/empty star)
     vscode.postMessage({ type: 'bookmarkStateChanged', value: isBookmarked });
+
+    // Update bottom toolbar bookmark button (codicon swap + active state)
+    const toolbarBookmark = document.getElementById('toolbar-bookmark');
+    if (toolbarBookmark) {
+      const icon = toolbarBookmark.querySelector('.codicon');
+      if (icon) {
+        icon.classList.toggle('codicon-star-full', isBookmarked);
+        icon.classList.toggle('codicon-star-empty', !isBookmarked);
+      }
+      toolbarBookmark.classList.toggle('active', isBookmarked);
+      toolbarBookmark.title = isBookmarked ? 'Remove bookmark' : 'Bookmark this note';
+    }
 
     if (!bookmarkButton) {
       return;
@@ -1479,6 +1493,24 @@
         vscode.postMessage({ type: 'openSettings' });
       });
     }
+
+    // Wire up bottom toolbar action buttons
+    const toolbarBindings = [
+      ['toolbar-add-note', addNewNote],
+      ['toolbar-prev', previousPage],
+      ['toolbar-next', nextPage],
+      ['toolbar-browse', openNoteBrowser],
+      ['toolbar-bookmark', toggleBookmark],
+      ['toolbar-preview', togglePreview],
+      ['toolbar-export', exportPage],
+      ['toolbar-import', () => vscode.postMessage({ type: 'importNotes' })]
+    ];
+    toolbarBindings.forEach(([id, handler]) => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.addEventListener('click', handler);
+      }
+    });
 
     // Add note browser event listeners
     const browseNotesButton = document.getElementById('browse-notes-button');

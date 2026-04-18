@@ -172,53 +172,7 @@
 			}
 		],
 		"menus": {
-			"view/title": [
-				{
-					"command": "better-sidebar-markdown-notes.addNote",
-					"group": "navigation@0",
-					"when": "view == betterSidebarMarkdownNotes.webview"
-				},
-				{
-					"command": "better-sidebar-markdown-notes.previousPage",
-					"group": "navigation@1",
-					"when": "view == betterSidebarMarkdownNotes.webview"
-				},
-				{
-					"command": "better-sidebar-markdown-notes.nextPage",
-					"group": "navigation@2",
-					"when": "view == betterSidebarMarkdownNotes.webview"
-				},
-				{
-					"command": "better-sidebar-markdown-notes.browseNotes",
-					"group": "navigation@3",
-					"when": "view == betterSidebarMarkdownNotes.webview"
-				},
-				{
-					"command": "better-sidebar-markdown-notes.bookmarkAdd",
-					"group": "navigation@4",
-					"when": "view == betterSidebarMarkdownNotes.webview && !better-sidebar-markdown-notes.isBookmarked"
-				},
-				{
-					"command": "better-sidebar-markdown-notes.bookmarkRemove",
-					"group": "navigation@4",
-					"when": "view == betterSidebarMarkdownNotes.webview && better-sidebar-markdown-notes.isBookmarked"
-				},
-				{
-					"command": "better-sidebar-markdown-notes.togglePreview",
-					"group": "navigation@5",
-					"when": "view == betterSidebarMarkdownNotes.webview"
-				},
-				{
-					"command": "better-sidebar-markdown-notes.exportPage",
-					"group": "navigation@6",
-					"when": "view == betterSidebarMarkdownNotes.webview"
-				},
-				{
-					"command": "better-sidebar-markdown-notes.importNotes",
-					"group": "navigation@7",
-					"when": "view == betterSidebarMarkdownNotes.webview"
-				}
-			]
+			"view/title": []
 		},
 		"configuration": [
 			{

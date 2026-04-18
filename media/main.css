@@ -54,6 +54,12 @@
 .codicon-file-text:before { content: "📄"; }
 .codicon-info:before { content: "ℹ"; }
 .codicon-trash:before { content: "🗑"; }
+.codicon-arrow-left:before { content: "←"; }
+.codicon-arrow-right:before { content: "→"; }
+.codicon-open-preview:before { content: "👁"; }
+.codicon-symbol-reference:before { content: "↗"; }
+.codicon-export:before { content: "↗"; }
+.codicon-eye:before { content: "👁"; }
 
 .codicon-modifier-spin {
   animation: codicon-spin 1.5s linear infinite;
@@ -155,9 +161,22 @@ body {
 }
 
 .save-status {
+  position: absolute;
+  top: 40px;
+  right: 8px;
   font-size: 11px;
   color: var(--vscode-descriptionForeground);
-  margin-left: auto;
+  background: var(--vscode-editor-background);
+  padding: 2px 6px;
+  border-radius: 3px;
+  pointer-events: none;
+  z-index: 999;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.save-status:not(:empty) {
+  opacity: 1;
 }
 
 .save-status.saving {
@@ -390,27 +409,39 @@ body {
 #content,
 #render {
   position: absolute;
-  top: 40px; /* Account for toolbar height */
-  bottom: 50px; /* Account for bottom toolbar height */
+  top: 36px; /* Match top toolbar height */
+  bottom: 0;
   right: 0;
   left: 0;
 }
 
-/* Bottom toolbar styles */
+/* Bottom toolbar styles (now positioned at top) */
 #bottom-toolbar {
   position: fixed;
-  bottom: 0;
+  top: 0;
   left: 0;
   right: 0;
-  height: 50px;
+  height: 36px;
   background: var(--vscode-editor-background);
-  border-top: 1px solid var(--vscode-panel-border);
+  border-bottom: 1px solid var(--vscode-panel-border);
   display: flex;
   align-items: center;
-  justify-content: center;
-  padding: 0 10px;
-  gap: 10px;
+  justify-content: flex-start;
+  padding: 0 6px;
+  gap: 2px;
   z-index: 1000;
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: nowrap;
+}
+
+#bottom-toolbar::-webkit-scrollbar {
+  height: 4px;
+}
+
+.toolbar-spacer {
+  flex: 1 1 auto;
+  min-width: 4px;
 }
 
 .bottom-button {
@@ -429,6 +460,23 @@ body {
   justify-content: center;
 }
 
+.bottom-button.icon-only {
+  background: transparent;
+  color: var(--vscode-icon-foreground, var(--vscode-foreground));
+  padding: 4px 6px;
+  min-width: auto;
+  border-radius: 3px;
+}
+
+.bottom-button.icon-only:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.2));
+}
+
+.bottom-button.icon-only.active {
+  background: var(--vscode-toolbar-activeBackground, rgba(128, 128, 128, 0.3));
+  color: var(--vscode-charts-yellow, #ffea00);
+}
+
 .bottom-button:hover {
   background: var(--vscode-button-hoverBackground);
 }
@@ -439,7 +487,23 @@ body {
 }
 
 .bottom-button .codicon {
-  font-size: 14px;
+  font-size: 16px;
+}
+
+.toolbar-svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+  stroke: currentColor;
+}
+
+.bottom-button.icon-only.active .toolbar-svg {
+  color: var(--vscode-charts-yellow, #ffea00);
+}
+
+/* Reserve room for the bottom toolbar so content isn't hidden behind it */
+body {
+  box-sizing: border-box;
 }
 
 /* Note Browser Modal Styles */

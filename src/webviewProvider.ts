@@ -109,6 +109,10 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
           this.openSettings();
           break;
         }
+        case 'importNotes': {
+          await this.importNotes();
+          break;
+        }
         case 'scanForNotes': {
           await this.handleScanForNotes(data.value);
           break;
@@ -1371,15 +1375,51 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
         <div id="render"></div>
         <div id="content"><textarea id="text-input" name="text-input" placeholder="Start by typing your markdown notes..."></textarea></div>
 
-        <!-- Bottom toolbar with Save and Options buttons -->
+        <!-- Bottom toolbar with all action buttons -->
         <div id="bottom-toolbar">
-          <button id="save-button" class="bottom-button" title="Save notes manually">
-            <span class="codicon codicon-save"></span>
-            Save
+          <button id="toolbar-add-note" class="bottom-button icon-only" title="Add new note">
+            <svg class="toolbar-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="12" y1="12" x2="12" y2="18"/>
+              <line x1="9" y1="15" x2="15" y2="15"/>
+            </svg>
           </button>
-          <button id="options-button" class="bottom-button" title="Open extension settings">
+          <button id="toolbar-prev" class="bottom-button icon-only" title="Previous page">
+            <span class="codicon codicon-arrow-left"></span>
+          </button>
+          <button id="toolbar-next" class="bottom-button icon-only" title="Next page">
+            <span class="codicon codicon-arrow-right"></span>
+          </button>
+          <button id="toolbar-browse" class="bottom-button icon-only" title="Browse notes">
+            <span class="codicon codicon-list-unordered"></span>
+          </button>
+          <button id="toolbar-bookmark" class="bottom-button icon-only" title="Toggle bookmark">
+            <span class="codicon codicon-star-empty"></span>
+          </button>
+          <button id="toolbar-preview" class="bottom-button icon-only" title="Toggle preview">
+            <span class="codicon codicon-open-preview"></span>
+          </button>
+          <button id="toolbar-export" class="bottom-button icon-only" title="Export page">
+            <svg class="toolbar-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+          </button>
+          <button id="toolbar-import" class="bottom-button icon-only" title="Import notes">
+            <svg class="toolbar-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+          </button>
+          <span class="toolbar-spacer"></span>
+          <button id="save-button" class="bottom-button icon-only" title="Save notes manually">
+            <span class="codicon codicon-save"></span>
+          </button>
+          <button id="options-button" class="bottom-button icon-only" title="Open extension settings">
             <span class="codicon codicon-settings-gear"></span>
-            Options
           </button>
         </div>
 
