@@ -327,9 +327,25 @@
   });
 
   const togglePreview = () => {
+    // Before switching modes, clean up any active highlight artifacts so they don't leak across modes.
+    try { clearPreviewHighlights(); } catch (err) {}
+    const layer = document.getElementById('search-highlights');
+    if (layer) {
+      layer.classList.remove('active');
+      layer.innerHTML = '';
+    }
     // Grabs the new state
     let newState = { ...getUpdatedContent(), state: currentState.state === 'editor' ? 'render' : 'editor' };
     saveState(newState);
+    // After saveState triggers a re-render, re-apply search if the search bar is visible.
+    setTimeout(() => {
+      const bar = document.getElementById('search-bar');
+      if (bar && !bar.classList.contains('hidden') && searchState.query) {
+        // Reset preview snapshot since renderView replaced #render content.
+        previewOriginalHTML = null;
+        computeMatches();
+      }
+    }, 0);
   };
 
   const exportPage = () => {
@@ -576,12 +592,22 @@
     const cs = window.getComputedStyle(ta);
     const propsToCopy = [
       'font-family', 'font-size', 'font-weight', 'font-style',
-      'line-height', 'letter-spacing', 'tab-size',
+      'line-height', 'letter-spacing', 'tab-size', 'text-indent',
       'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
       'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width',
-      'box-sizing'
+      'border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style'
     ];
     propsToCopy.forEach((p) => { layer.style.setProperty(p, cs.getPropertyValue(p)); });
+    // Position the layer to exactly cover the textarea's content area, accounting for scrollbar.
+    layer.style.left = ta.offsetLeft + 'px';
+    layer.style.top = ta.offsetTop + 'px';
+    // clientWidth/clientHeight exclude border + scrollbar; add borders back so border-box matches offset rect minus scrollbar.
+    const bl = parseFloat(cs.borderLeftWidth) || 0;
+    const br = parseFloat(cs.borderRightWidth) || 0;
+    const bt = parseFloat(cs.borderTopWidth) || 0;
+    const bb = parseFloat(cs.borderBottomWidth) || 0;
+    layer.style.width = (ta.clientWidth + bl + br) + 'px';
+    layer.style.height = (ta.clientHeight + bt + bb) + 'px';
   };
 
   const renderHighlights = () => {
@@ -606,20 +632,111 @@
       cursor = end;
     });
     html += escapeHtml(text.substring(cursor));
-    layer.innerHTML = html;
+    layer.innerHTML = '<div class="hl-inner">' + html + '</div>';
     layer.classList.add('active');
-    layer.scrollTop = ta.scrollTop;
-    layer.scrollLeft = ta.scrollLeft;
+    syncHighlightScroll();
+  };
+
+  const syncHighlightScroll = () => {
+    const ta = document.getElementById('text-input');
+    const layer = highlightsLayer();
+    if (!ta || !layer) return;
+    const inner = layer.firstElementChild;
+    if (inner) {
+      inner.style.transform = `translate(${-ta.scrollLeft}px, ${-ta.scrollTop}px)`;
+    }
+  };
+
+  const isPreviewMode = () => {
+    const r = document.getElementById('render');
+    return !!(r && !r.classList.contains('hidden'));
+  };
+
+  // ===== Preview-mode highlight (mutates #render text nodes) =====
+  let previewOriginalHTML = null;
+  let previewMarks = [];
+
+  const clearPreviewHighlights = () => {
+    const r = document.getElementById('render');
+    if (!r || previewOriginalHTML === null) return;
+    r.innerHTML = previewOriginalHTML;
+    previewOriginalHTML = null;
+    previewMarks = [];
+  };
+
+  const renderPreviewHighlights = () => {
+    const r = document.getElementById('render');
+    if (!r) return;
+    if (previewOriginalHTML !== null) {
+      r.innerHTML = previewOriginalHTML;
+    } else {
+      previewOriginalHTML = r.innerHTML;
+    }
+    previewMarks = [];
+    if (!searchState.query) return;
+    const query = searchState.query;
+    const cs = searchState.caseSensitive;
+    const needle = cs ? query : query.toLowerCase();
+    if (!needle) return;
+    const walker = document.createTreeWalker(r, NodeFilter.SHOW_TEXT, null);
+    const targets = [];
+    let n;
+    while ((n = walker.nextNode())) {
+      if (!n.parentElement) continue;
+      const tag = n.parentElement.tagName;
+      if (tag === 'SCRIPT' || tag === 'STYLE') continue;
+      targets.push(n);
+    }
+    targets.forEach((textNode) => {
+      const text = textNode.nodeValue;
+      const hay = cs ? text : text.toLowerCase();
+      let last = 0;
+      let idx;
+      const frag = document.createDocumentFragment();
+      let any = false;
+      while ((idx = hay.indexOf(needle, last)) !== -1) {
+        any = true;
+        if (idx > last) frag.appendChild(document.createTextNode(text.substring(last, idx)));
+        const m = document.createElement('mark');
+        m.className = 'preview-search-mark';
+        m.textContent = text.substring(idx, idx + query.length);
+        frag.appendChild(m);
+        previewMarks.push(m);
+        last = idx + query.length;
+      }
+      if (any) {
+        if (last < text.length) frag.appendChild(document.createTextNode(text.substring(last)));
+        textNode.parentNode.replaceChild(frag, textNode);
+      }
+    });
+  };
+
+  const setCurrentPreviewMark = (idx) => {
+    previewMarks.forEach((m, i) => {
+      m.classList.toggle('current', i === idx);
+    });
   };
 
   const computeMatches = () => {
     const input = searchInput();
-    const ta = document.getElementById('text-input');
-    if (!input || !ta) return;
+    if (!input) return;
     const query = input.value;
     searchState.query = query;
     searchState.matches = [];
     searchState.current = -1;
+
+    if (isPreviewMode()) {
+      renderPreviewHighlights();
+      const total = previewMarks.length;
+      searchCount().textContent = total ? `1/${total}` : '0/0';
+      // Build virtual matches array of length=total so jumpToMatch logic works.
+      searchState.matches = previewMarks.map((_, i) => i);
+      if (total) jumpToMatch(0);
+      return;
+    }
+
+    const ta = document.getElementById('text-input');
+    if (!ta) return;
     if (!query) {
       searchCount().textContent = '0/0';
       renderHighlights();
@@ -646,24 +763,62 @@
   };
 
   const jumpToMatch = (i) => {
-    const ta = document.getElementById('text-input');
-    const input = searchInput();
-    if (!ta || !input || !searchState.matches.length) return;
     const total = searchState.matches.length;
+    if (!total) return;
     const idx = ((i % total) + total) % total;
     searchState.current = idx;
+    const input = searchInput();
+
+    if (isPreviewMode()) {
+      setCurrentPreviewMark(idx);
+      const mark = previewMarks[idx];
+      if (mark) {
+        // Use scrollIntoView to let the browser locate the actual scroll container
+        // (which may be #render, an ancestor, or document.scrollingElement).
+        try {
+          mark.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
+        } catch (err) {
+          mark.scrollIntoView();
+        }
+      }
+      searchCount().textContent = `${idx + 1}/${total}`;
+      if (input) setTimeout(() => input.focus(), 0);
+      return;
+    }
+
+    const ta = document.getElementById('text-input');
+    if (!ta || !input) return;
     const start = searchState.matches[idx];
     const end = start + searchState.query.length;
     ta.focus();
     ta.setSelectionRange(start, end);
-    // Scroll into view by setting scrollTop heuristically
-    const before = ta.value.substring(0, start);
-    const lines = before.split('\n').length;
-    const lineHeight = parseFloat(window.getComputedStyle(ta).lineHeight) || 18;
-    ta.scrollTop = Math.max(0, lines * lineHeight - ta.clientHeight / 2);
-    searchCount().textContent = `${idx + 1}/${total}`;
+    // Render first so the .current mark exists in the layer for precise measurement.
     renderHighlights();
-    // Re-focus the input so typing continues to filter
+    const layer = highlightsLayer();
+    const inner = layer ? layer.firstElementChild : null;
+    const cur = inner ? inner.querySelector('mark.current') : null;
+    if (cur) {
+      // offsetTop is relative to inner div; inner is positioned at 0 inside layer (which mirrors textarea content area).
+      const markTop = cur.offsetTop;
+      const markH = cur.offsetHeight || parseFloat(window.getComputedStyle(ta).lineHeight) || 18;
+      ta.scrollTop = Math.max(0, markTop - ta.clientHeight / 2 + markH / 2);
+      // Horizontal scroll if needed
+      const markLeft = cur.offsetLeft;
+      const markW = cur.offsetWidth;
+      if (markLeft < ta.scrollLeft) {
+        ta.scrollLeft = Math.max(0, markLeft - 20);
+      } else if (markLeft + markW > ta.scrollLeft + ta.clientWidth) {
+        ta.scrollLeft = markLeft + markW - ta.clientWidth + 20;
+      }
+    } else {
+      // Fallback to line-based heuristic
+      const before = ta.value.substring(0, start);
+      const lines = before.split('\n').length;
+      const lineHeight = parseFloat(window.getComputedStyle(ta).lineHeight) || 18;
+      ta.scrollTop = Math.max(0, lines * lineHeight - ta.clientHeight / 2);
+    }
+    syncHighlightScroll();
+    searchCount().textContent = `${idx + 1}/${total}`;
     setTimeout(() => input.focus(), 0);
   };
 
@@ -673,8 +828,13 @@
     const ta = document.getElementById('text-input');
     if (!bar || !input) return;
     bar.classList.remove('hidden');
-    // Pre-fill with current selection if any
-    if (ta && ta.selectionStart !== ta.selectionEnd) {
+    // Pre-fill with current selection
+    if (isPreviewMode()) {
+      try {
+        const sel = window.getSelection ? String(window.getSelection() || '') : '';
+        if (sel && !sel.includes('\n')) input.value = sel;
+      } catch (err) {}
+    } else if (ta && ta.selectionStart !== ta.selectionEnd) {
       const sel = ta.value.substring(ta.selectionStart, ta.selectionEnd);
       if (sel && !sel.includes('\n')) {
         input.value = sel;
@@ -693,11 +853,12 @@
       layer.classList.remove('active');
       layer.innerHTML = '';
     }
+    clearPreviewHighlights();
     searchState.query = '';
     searchState.matches = [];
     searchState.current = -1;
     const ta = document.getElementById('text-input');
-    if (ta) ta.focus();
+    if (!isPreviewMode() && ta) ta.focus();
   };
 
   document.addEventListener('keydown', (event) => {
@@ -755,11 +916,17 @@
       ta.addEventListener('scroll', () => {
         const layer = highlightsLayer();
         if (layer && layer.classList.contains('active')) {
-          layer.scrollTop = ta.scrollTop;
-          layer.scrollLeft = ta.scrollLeft;
+          syncHighlightScroll();
         }
       });
     }
+    window.addEventListener('resize', () => {
+      const layer = highlightsLayer();
+      if (layer && layer.classList.contains('active')) {
+        syncHighlightStyle();
+        syncHighlightScroll();
+      }
+    });
   } catch (err) { console.warn('[Search] scroll sync failed:', err); }
   // ============== End in-page search ==============
 

@@ -84,19 +84,25 @@
   position: absolute;
   top: 0;
   left: 0;
-  right: 0;
-  bottom: 0;
+  /* width/height set in JS to match textarea client area exactly */
   pointer-events: none;
   overflow: hidden;
-  white-space: break-spaces;
-  word-wrap: break-word;
   color: transparent;
   z-index: 1;
   visibility: hidden;
+  box-sizing: border-box;
 }
 
 .search-highlights.active {
   visibility: visible;
+}
+
+.search-highlights .hl-inner {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  /* transform set in JS to mirror textarea scroll */
+  will-change: transform;
 }
 
 .search-highlights mark {
@@ -108,6 +114,19 @@
 
 .search-highlights mark.current {
   background: var(--vscode-editor-findMatchBackground, rgba(255, 200, 0, 0.6));
+}
+
+/* Highlights injected directly into rendered preview */
+#render mark.preview-search-mark {
+  background: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.33));
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+#render mark.preview-search-mark.current {
+  background: var(--vscode-editor-findMatchBackground, rgba(255, 200, 0, 0.6));
+  outline: 1px solid var(--vscode-editor-findMatchBorder, transparent);
 }
 
 html,
