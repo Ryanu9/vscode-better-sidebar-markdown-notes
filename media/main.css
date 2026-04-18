@@ -774,9 +774,9 @@ body {
   gap: 8px;
   margin-bottom: 16px;
   padding: 12px;
-  background: var(--vscode-input-background);
-  border: 1px solid var(--vscode-input-border);
-  border-radius: 4px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
   flex: 0 0 auto;
 }
 
@@ -869,8 +869,8 @@ body {
 }
 
 .note-item {
-  background: var(--vscode-list-inactiveSelectionBackground);
-  border: 1px solid var(--vscode-input-border);
+  background: transparent;
+  border: 1px solid var(--vscode-panel-border, var(--vscode-input-border));
   border-radius: 4px;
   padding: 6px 8px;
   cursor: pointer;
@@ -1221,11 +1221,37 @@ body {
 }
 
 .confirm-modal-content {
-  max-width: 420px;
+  max-width: 320px;
+}
+
+.confirm-modal-content .modal-header {
+  padding: 10px 14px;
+}
+
+.confirm-modal-content .modal-header h3 {
+  font-size: 13px;
+  margin: 0;
 }
 
 .confirm-modal-content .modal-body {
-  flex: 0 1 auto; /* Don't grow, allow natural height */
+  flex: 0 1 auto;
+  padding: 10px 14px;
+  font-size: 12px;
+}
+
+.confirm-modal-content .modal-body p {
+  margin: 0;
+}
+
+.confirm-modal-content .modal-footer {
+  padding: 8px 14px;
+  gap: 8px;
+}
+
+.confirm-modal-content .modal-footer .primary-button {
+  padding: 4px 12px;
+  font-size: 12px;
+  min-width: 60px;
 }
 
 /* Toast/undo styles */
@@ -1589,58 +1615,48 @@ body {
 
 /* Bookmark filter in browse notes modal */
 .bookmark-filter {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
   margin-left: auto;
-}
-
-/* Compact bookmark filter for Browse Notes modal */
-#note-browser-modal .bookmark-filter {
-  gap: var(--browse-compact-gap);
-}
-
-.bookmark-filter label {
-  font-size: 12px;
-  color: var(--vscode-foreground);
-}
-
-/* Compact filter label for Browse Notes modal */
-#note-browser-modal .bookmark-filter label {
-  font-size: 10px;
-}
-
-.bookmark-filter .filter-select {
-  background: var(--vscode-input-background);
-  color: var(--vscode-input-foreground);
   border: 1px solid var(--vscode-input-border);
-  padding: 4px 8px;
-  border-radius: 3px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: transparent;
+}
+
+.bookmark-filter .filter-btn {
+  background: transparent;
+  color: var(--vscode-foreground);
+  border: none;
+  padding: 4px 10px;
   font-size: 12px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  transition: background 0.15s, color 0.15s;
 }
 
-/* Compact filter select for Browse Notes modal */
-#note-browser-modal .bookmark-filter .filter-select {
-  padding: 3px 8px;
-  font-size: 12px;
+.bookmark-filter .filter-btn + .filter-btn {
+  border-left: 1px solid var(--vscode-input-border);
 }
 
-.bookmark-filter .filter-select:hover {
-  border-color: var(--vscode-focusBorder);
+.bookmark-filter .filter-btn:hover {
+  background: var(--vscode-list-hoverBackground);
 }
 
-.bookmark-filter .filter-select:focus {
-  outline: 1px solid var(--vscode-focusBorder);
-  outline-offset: -1px;
+.bookmark-filter .filter-btn.active {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+
+.bookmark-filter .filter-btn svg {
+  display: block;
 }
 
 /* Responsive adjustments for Browse Notes modal at narrow widths */
 @media (max-width: 420px) {
-  #note-browser-modal .bookmark-filter label {
-    display: none; /* Hide "Show:" label on narrow screens */
-  }
-  
   #note-browser-modal .modal-content {
     width: 100%;
   }

@@ -1044,9 +1044,9 @@
       currentState.bookmarks = new Array(currentState.pages.length).fill(false);
     }
 
-    // Get bookmark filter value
-    const bookmarkFilter = document.getElementById('bookmark-filter-select');
-    const filterValue = bookmarkFilter ? bookmarkFilter.value : 'all';
+    // Get bookmark filter value (from button group)
+    const activeFilterBtn = document.querySelector('.bookmark-filter .filter-btn.active');
+    const filterValue = activeFilterBtn ? activeFilterBtn.getAttribute('data-filter') : 'all';
 
     // Generate note items
     currentState.pages.forEach((page, index) => {
@@ -1944,15 +1944,15 @@
       bookmarkButton.addEventListener('click', toggleBookmark);
     }
 
-    // Wire bookmark filter in browse notes modal
-    const bookmarkFilter = document.getElementById('bookmark-filter-select');
-    if (bookmarkFilter) {
-      // When the filter changes, update the browser list
-      bookmarkFilter.addEventListener('change', () => {
-        // updateNoteBrowser rebuilds the visible list and respects the filter
+    // Wire bookmark filter button group in browse notes modal
+    const filterBtns = document.querySelectorAll('.bookmark-filter .filter-btn');
+    filterBtns.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        filterBtns.forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
         updateNoteBrowser();
       });
-    }
+    });
 
     // Also wire the modal's add new note button
     const addNewNoteModalBtn = document.getElementById('add-new-note-modal');

@@ -1246,12 +1246,13 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
                       <polyline points="9 18 15 12 9 6"/>
                     </svg>
                   </button>
-                  <div class="bookmark-filter">
-                    <label for="bookmark-filter-select">Show:</label>
-                    <select id="bookmark-filter-select" class="filter-select">
-                      <option value="all">All Notes</option>
-                      <option value="bookmarked">Bookmarked</option>
-                    </select>
+                  <div class="bookmark-filter" role="group" aria-label="Filter notes">
+                    <button type="button" id="filter-btn-all" class="filter-btn active" data-filter="all" title="Show all notes">All</button>
+                    <button type="button" id="filter-btn-bookmarked" class="filter-btn" data-filter="bookmarked" title="Show bookmarked notes only" aria-label="Show bookmarked only">
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                        <path d="M8 1L10.163 5.381L15 6.134L11.5 9.548L12.326 14.366L8 12.096L3.674 14.366L4.5 9.548L1 6.134L5.837 5.381L8 1Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" fill="currentColor"/>
+                      </svg>
+                    </button>
                   </div>
                 </div>
               </div>
