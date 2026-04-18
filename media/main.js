@@ -578,7 +578,7 @@
   });
 
   // ============== In-page search (Ctrl+F) ==============
-  const searchState = { matches: [], current: -1, caseSensitive: false, query: '' };
+  const searchState = { matches: [], current: -1, caseSensitive: false, query: '', composing: false };
 
   const searchBar = () => document.getElementById('search-bar');
   const searchInput = () => document.getElementById('search-input');
@@ -717,7 +717,7 @@
     });
   };
 
-  const computeMatches = () => {
+  const computeMatches = (jumpToFirst = true) => {
     const input = searchInput();
     if (!input) return;
     const query = input.value;
@@ -731,7 +731,7 @@
       searchCount().textContent = total ? `1/${total}` : '0/0';
       // Build virtual matches array of length=total so jumpToMatch logic works.
       searchState.matches = previewMarks.map((_, i) => i);
-      if (total) jumpToMatch(0);
+      if (total && jumpToFirst) jumpToMatch(0);
       return;
     }
 
@@ -755,7 +755,7 @@
     searchCount().textContent = searchState.matches.length
       ? `1/${searchState.matches.length}`
       : '0/0';
-    if (searchState.matches.length) {
+    if (searchState.matches.length && jumpToFirst) {
       jumpToMatch(0);
     } else {
       renderHighlights();
@@ -790,8 +790,10 @@
     if (!ta || !input) return;
     const start = searchState.matches[idx];
     const end = start + searchState.query.length;
-    ta.focus();
-    ta.setSelectionRange(start, end);
+    // Set selection WITHOUT stealing focus from the search input.
+    // ta.focus() would interrupt IME composition (e.g. Chinese pinyin) on the input.
+    // setSelectionRange works on textarea regardless of focus state; selection becomes visible when ta is focused later.
+    try { ta.setSelectionRange(start, end); } catch (err) {}
     // Render first so the .current mark exists in the layer for precise measurement.
     renderHighlights();
     const layer = highlightsLayer();
@@ -819,7 +821,7 @@
     }
     syncHighlightScroll();
     searchCount().textContent = `${idx + 1}/${total}`;
-    setTimeout(() => input.focus(), 0);
+    // No focus juggling needed since we never moved focus away from the input.
   };
 
   const openSearch = () => {
@@ -880,7 +882,16 @@
   const wireSearchBar = () => {
     const input = searchInput();
     if (!input) return;
-    input.addEventListener('input', computeMatches);
+    input.addEventListener('compositionstart', () => { searchState.composing = true; });
+    input.addEventListener('compositionend', () => {
+      searchState.composing = false;
+      computeMatches();
+    });
+    input.addEventListener('input', () => {
+      // Skip while IME composition is active to avoid interrupting it.
+      if (searchState.composing) return;
+      computeMatches();
+    });
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
@@ -938,10 +949,10 @@
       scheduleAutoSave(currentState);
     }
 
-    // Re-run search if search bar is open
+    // Re-run search if search bar is open (do NOT jump to first match — preserve cursor position).
     const bar = document.getElementById('search-bar');
     if (bar && !bar.classList.contains('hidden') && searchState.query) {
-      computeMatches();
+      computeMatches(false);
     }
   });
 
