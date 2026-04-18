@@ -561,12 +561,220 @@
     }
   });
 
+  // ============== In-page search (Ctrl+F) ==============
+  const searchState = { matches: [], current: -1, caseSensitive: false, query: '' };
+
+  const searchBar = () => document.getElementById('search-bar');
+  const searchInput = () => document.getElementById('search-input');
+  const searchCount = () => document.getElementById('search-count');
+  const highlightsLayer = () => document.getElementById('search-highlights');
+
+  const syncHighlightStyle = () => {
+    const ta = document.getElementById('text-input');
+    const layer = highlightsLayer();
+    if (!ta || !layer) return;
+    const cs = window.getComputedStyle(ta);
+    const propsToCopy = [
+      'font-family', 'font-size', 'font-weight', 'font-style',
+      'line-height', 'letter-spacing', 'tab-size',
+      'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+      'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width',
+      'box-sizing'
+    ];
+    propsToCopy.forEach((p) => { layer.style.setProperty(p, cs.getPropertyValue(p)); });
+  };
+
+  const renderHighlights = () => {
+    const ta = document.getElementById('text-input');
+    const layer = highlightsLayer();
+    if (!ta || !layer) return;
+    if (!searchState.query || !searchState.matches.length) {
+      layer.classList.remove('active');
+      layer.innerHTML = '';
+      return;
+    }
+    syncHighlightStyle();
+    const text = ta.value;
+    const qLen = searchState.query.length;
+    let html = '';
+    let cursor = 0;
+    searchState.matches.forEach((start, i) => {
+      const end = start + qLen;
+      html += escapeHtml(text.substring(cursor, start));
+      const cls = i === searchState.current ? ' class="current"' : '';
+      html += `<mark${cls}>${escapeHtml(text.substring(start, end))}</mark>`;
+      cursor = end;
+    });
+    html += escapeHtml(text.substring(cursor));
+    layer.innerHTML = html;
+    layer.classList.add('active');
+    layer.scrollTop = ta.scrollTop;
+    layer.scrollLeft = ta.scrollLeft;
+  };
+
+  const computeMatches = () => {
+    const input = searchInput();
+    const ta = document.getElementById('text-input');
+    if (!input || !ta) return;
+    const query = input.value;
+    searchState.query = query;
+    searchState.matches = [];
+    searchState.current = -1;
+    if (!query) {
+      searchCount().textContent = '0/0';
+      renderHighlights();
+      return;
+    }
+    const text = ta.value;
+    const hay = searchState.caseSensitive ? text : text.toLowerCase();
+    const needle = searchState.caseSensitive ? query : query.toLowerCase();
+    let idx = 0;
+    while (idx <= hay.length - needle.length) {
+      const found = hay.indexOf(needle, idx);
+      if (found === -1) break;
+      searchState.matches.push(found);
+      idx = found + Math.max(needle.length, 1);
+    }
+    searchCount().textContent = searchState.matches.length
+      ? `1/${searchState.matches.length}`
+      : '0/0';
+    if (searchState.matches.length) {
+      jumpToMatch(0);
+    } else {
+      renderHighlights();
+    }
+  };
+
+  const jumpToMatch = (i) => {
+    const ta = document.getElementById('text-input');
+    const input = searchInput();
+    if (!ta || !input || !searchState.matches.length) return;
+    const total = searchState.matches.length;
+    const idx = ((i % total) + total) % total;
+    searchState.current = idx;
+    const start = searchState.matches[idx];
+    const end = start + searchState.query.length;
+    ta.focus();
+    ta.setSelectionRange(start, end);
+    // Scroll into view by setting scrollTop heuristically
+    const before = ta.value.substring(0, start);
+    const lines = before.split('\n').length;
+    const lineHeight = parseFloat(window.getComputedStyle(ta).lineHeight) || 18;
+    ta.scrollTop = Math.max(0, lines * lineHeight - ta.clientHeight / 2);
+    searchCount().textContent = `${idx + 1}/${total}`;
+    renderHighlights();
+    // Re-focus the input so typing continues to filter
+    setTimeout(() => input.focus(), 0);
+  };
+
+  const openSearch = () => {
+    const bar = searchBar();
+    const input = searchInput();
+    const ta = document.getElementById('text-input');
+    if (!bar || !input) return;
+    bar.classList.remove('hidden');
+    // Pre-fill with current selection if any
+    if (ta && ta.selectionStart !== ta.selectionEnd) {
+      const sel = ta.value.substring(ta.selectionStart, ta.selectionEnd);
+      if (sel && !sel.includes('\n')) {
+        input.value = sel;
+      }
+    }
+    input.focus();
+    input.select();
+    computeMatches();
+  };
+
+  const closeSearch = () => {
+    const bar = searchBar();
+    if (bar) bar.classList.add('hidden');
+    const layer = highlightsLayer();
+    if (layer) {
+      layer.classList.remove('active');
+      layer.innerHTML = '';
+    }
+    searchState.query = '';
+    searchState.matches = [];
+    searchState.current = -1;
+    const ta = document.getElementById('text-input');
+    if (ta) ta.focus();
+  };
+
+  document.addEventListener('keydown', (event) => {
+    if (!event.key) return;
+    const isFind = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f';
+    if (isFind) {
+      event.preventDefault();
+      openSearch();
+      return;
+    }
+    const bar = searchBar();
+    if (event.key === 'Escape' && bar && !bar.classList.contains('hidden')) {
+      event.preventDefault();
+      closeSearch();
+    }
+  });
+
+  // Wire up search bar controls once DOM is parsed
+  const wireSearchBar = () => {
+    const input = searchInput();
+    if (!input) return;
+    input.addEventListener('input', computeMatches);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (!searchState.matches.length) return;
+        jumpToMatch(searchState.current + (e.shiftKey ? -1 : 1));
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        closeSearch();
+      }
+    });
+    const prevBtn = document.getElementById('search-prev');
+    if (prevBtn) prevBtn.addEventListener('click', () => {
+      if (searchState.matches.length) jumpToMatch(searchState.current - 1);
+    });
+    const nextBtn = document.getElementById('search-next');
+    if (nextBtn) nextBtn.addEventListener('click', () => {
+      if (searchState.matches.length) jumpToMatch(searchState.current + 1);
+    });
+    const closeBtn = document.getElementById('search-close');
+    if (closeBtn) closeBtn.addEventListener('click', closeSearch);
+    const caseBtn = document.getElementById('search-case');
+    if (caseBtn) caseBtn.addEventListener('click', () => {
+      searchState.caseSensitive = !searchState.caseSensitive;
+      caseBtn.classList.toggle('active', searchState.caseSensitive);
+      computeMatches();
+    });
+  };
+  try { wireSearchBar(); } catch (err) { console.warn('[Search] wire failed:', err); }
+  // Sync highlight layer scroll with textarea
+  try {
+    const ta = document.getElementById('text-input');
+    if (ta) {
+      ta.addEventListener('scroll', () => {
+        const layer = highlightsLayer();
+        if (layer && layer.classList.contains('active')) {
+          layer.scrollTop = ta.scrollTop;
+          layer.scrollLeft = ta.scrollLeft;
+        }
+      });
+    }
+  } catch (err) { console.warn('[Search] scroll sync failed:', err); }
+  // ============== End in-page search ==============
+
   document.getElementById('text-input').addEventListener('input', () => {
     debouncedSaveContent();
 
     // Trigger auto-save if initialized
     if (isInitialized) {
       scheduleAutoSave(currentState);
+    }
+
+    // Re-run search if search bar is open
+    const bar = document.getElementById('search-bar');
+    if (bar && !bar.classList.contains('hidden') && searchState.query) {
+      computeMatches();
     }
   });
 

@@ -1174,7 +1174,10 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
               <h3>Browse Notes</h3>
               <div class="modal-header-actions">
                 <button id="add-new-note-modal" class="icon-only-button" aria-label="Add new note" title="Add new note">
-                  <span class="codicon codicon-plus"></span>
+                  <svg class="toolbar-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <line x1="12" y1="5" x2="12" y2="19"/>
+                    <line x1="5" y1="12" x2="19" y2="12"/>
+                  </svg>
                 </button>
                 <button id="close-browser" class="close-button" aria-label="Close note browser" title="Close note browser">
                   <span class="codicon codicon-close"></span>
@@ -1185,11 +1188,15 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
               <div class="notes-navigation">
                 <div class="notes-nav-top">
                   <button id="prev-note-nav" class="nav-button" title="Previous note">
-                    <span class="codicon codicon-chevron-left"></span>
+                    <svg class="toolbar-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <polyline points="15 18 9 12 15 6"/>
+                    </svg>
                   </button>
                   <span id="note-counter">1 of 1</span>
                   <button id="next-note-nav" class="nav-button" title="Next note">
-                    <span class="codicon codicon-chevron-right"></span>
+                    <svg class="toolbar-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <polyline points="9 18 15 12 9 6"/>
+                    </svg>
                   </button>
                   <div class="bookmark-filter">
                     <label for="bookmark-filter-select">Show:</label>
@@ -1372,8 +1379,27 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
           </div>
         </div>
 
+        <!-- In-page search bar (Ctrl+F) -->
+        <div id="search-bar" class="search-bar hidden" role="search">
+          <input type="text" id="search-input" placeholder="Find" autocomplete="off" spellcheck="false" />
+          <span id="search-count" class="search-count">0/0</span>
+          <button id="search-prev" class="search-btn" title="Previous (Shift+Enter)">
+            <span class="codicon codicon-arrow-left"></span>
+          </button>
+          <button id="search-next" class="search-btn" title="Next (Enter)">
+            <span class="codicon codicon-arrow-right"></span>
+          </button>
+          <button id="search-case" class="search-btn" title="Match case">Aa</button>
+          <button id="search-close" class="search-btn" title="Close (Esc)">
+            <span class="codicon codicon-close"></span>
+          </button>
+        </div>
+
         <div id="render"></div>
-        <div id="content"><textarea id="text-input" name="text-input" placeholder="Start by typing your markdown notes..."></textarea></div>
+        <div id="content">
+          <div id="search-highlights" class="search-highlights" aria-hidden="true"></div>
+          <textarea id="text-input" name="text-input" placeholder="Start by typing your markdown notes..."></textarea>
+        </div>
 
         <!-- Bottom toolbar with all action buttons -->
         <div id="bottom-toolbar">
@@ -1386,10 +1412,14 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
             </svg>
           </button>
           <button id="toolbar-prev" class="bottom-button icon-only" title="Previous page">
-            <span class="codicon codicon-arrow-left"></span>
+            <svg class="toolbar-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="15 18 9 12 15 6"/>
+            </svg>
           </button>
           <button id="toolbar-next" class="bottom-button icon-only" title="Next page">
-            <span class="codicon codicon-arrow-right"></span>
+            <svg class="toolbar-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="9 18 15 12 9 6"/>
+            </svg>
           </button>
           <button id="toolbar-browse" class="bottom-button icon-only" title="Browse notes">
             <span class="codicon codicon-list-unordered"></span>

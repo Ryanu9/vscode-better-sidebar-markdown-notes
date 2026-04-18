@@ -13,7 +13,7 @@
   --browse-modal-footer-padding: 8px 12px;
   --browse-nav-padding: 6px 8px;
   --browse-note-item-padding: 8px;
-  --browse-button-size: 28px; /* Icon-only button size */
+  --browse-button-size: 32px; /* Icon-only button size */
   --browse-compact-gap: 4px;
 }
 
@@ -74,6 +74,40 @@
   resize: none;
   outline: 0;
   white-space: break-spaces;
+  background: transparent;
+  position: relative;
+  z-index: 2;
+}
+
+/* Mirror layer behind the textarea that shows search highlights */
+.search-highlights {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  overflow: hidden;
+  white-space: break-spaces;
+  word-wrap: break-word;
+  color: transparent;
+  z-index: 1;
+  visibility: hidden;
+}
+
+.search-highlights.active {
+  visibility: visible;
+}
+
+.search-highlights mark {
+  background: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.33));
+  color: transparent;
+  border-radius: 2px;
+  padding: 0;
+}
+
+.search-highlights mark.current {
+  background: var(--vscode-editor-findMatchBackground, rgba(255, 200, 0, 0.6));
 }
 
 html,
@@ -177,6 +211,73 @@ body {
 
 .save-status:not(:empty) {
   opacity: 1;
+}
+
+/* In-page search bar */
+.search-bar {
+  position: fixed;
+  top: 36px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  z-index: 1500;
+}
+
+.search-bar.hidden {
+  display: none !important;
+}
+
+.search-bar input[type="text"] {
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border, transparent);
+  outline: none;
+  padding: 2px 6px;
+  font-size: 12px;
+  width: 140px;
+  height: 22px;
+  border-radius: 2px;
+}
+
+.search-bar input[type="text"]:focus {
+  border-color: var(--vscode-focusBorder);
+}
+
+.search-count {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  min-width: 36px;
+  text-align: center;
+}
+
+.search-btn {
+  background: transparent;
+  color: var(--vscode-icon-foreground, var(--vscode-foreground));
+  border: none;
+  padding: 2px 5px;
+  cursor: pointer;
+  border-radius: 3px;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+}
+
+.search-btn:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.2));
+}
+
+.search-btn.active {
+  background: var(--vscode-inputOption-activeBackground, rgba(0, 120, 215, 0.4));
+  color: var(--vscode-inputOption-activeForeground, var(--vscode-foreground));
 }
 
 .save-status.saving {
@@ -422,7 +523,7 @@ body {
   left: 0;
   right: 0;
   height: 36px;
-  background: var(--vscode-editor-background);
+  background: var(--vscode-sideBar-background, transparent);
   border-bottom: 1px solid var(--vscode-panel-border);
   display: flex;
   align-items: center;
@@ -495,6 +596,12 @@ body {
   height: 16px;
   display: block;
   stroke: currentColor;
+}
+
+.icon-only-button .toolbar-svg,
+.nav-button .toolbar-svg {
+  width: 18px;
+  height: 18px;
 }
 
 .bottom-button.icon-only.active .toolbar-svg {
@@ -584,8 +691,8 @@ body {
 
 /* Icon-only button style for compact modals */
 .icon-only-button {
-  background: var(--vscode-button-background);
-  color: var(--vscode-button-foreground);
+  background: transparent;
+  color: var(--vscode-icon-foreground, var(--vscode-foreground));
   border: none;
   padding: 0;
   border-radius: 3px;
@@ -600,7 +707,7 @@ body {
 }
 
 .icon-only-button:hover {
-  background: var(--vscode-button-hoverBackground);
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.2));
 }
 
 .icon-only-button .codicon {
@@ -685,8 +792,8 @@ body {
 }
 
 .nav-button {
-  background: var(--vscode-button-background);
-  color: var(--vscode-button-foreground);
+  background: transparent;
+  color: var(--vscode-icon-foreground, var(--vscode-foreground));
   border: none;
   padding: 6px 8px;
   border-radius: 3px;
@@ -706,7 +813,7 @@ body {
 }
 
 .nav-button:hover:not(:disabled) {
-  background: var(--vscode-button-hoverBackground);
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.2));
 }
 
 .nav-button:disabled {
