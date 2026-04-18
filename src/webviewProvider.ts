@@ -838,12 +838,40 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
         isOldExtension: false
       });
 
+      items.push({
+        label: 'Select Markdown File(s)...',
+        description: 'Pick one or more .md files directly to import',
+        detail: undefined,
+        path: '__files__',
+        isOldExtension: false
+      });
+
       const selected = await vscode.window.showQuickPick(items, {
         placeHolder: 'Select import source'
       });
 
       if (!selected) {
         return; // User cancelled
+      }
+
+      if (selected.path === '__files__') {
+        // User wants to pick individual markdown files
+        const picked = await vscode.window.showOpenDialog({
+          canSelectFiles: true,
+          canSelectFolders: false,
+          canSelectMany: true,
+          openLabel: 'Import',
+          filters: { Markdown: ['md', 'markdown', 'mdown', 'mkd', 'txt'] }
+        });
+        if (!picked || picked.length === 0) {
+          return;
+        }
+
+        if (this._view) {
+          this._view.webview.postMessage({ type: 'openImportModal' });
+        }
+        await this.importSpecificFiles(picked.map((u) => u.fsPath));
+        return;
       }
 
       if (selected.path === '') {
@@ -877,9 +905,29 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
     }
   }
 
-  /**
-   * Start scanning for notes in the specified path
-   */
+  private async importSpecificFiles(filePaths: string[]): Promise<void> {
+    try {
+      const discoveredNotes = await this.importService.loadSpecificFiles(filePaths);
+      if (discoveredNotes.length === 0) {
+        vscode.window.showInformationMessage('No importable content in selected file(s).');
+        return;
+      }
+      if (this._view) {
+        this._view.webview.postMessage({
+          type: 'openImportModal'
+        });
+        this._view.webview.postMessage({
+          type: 'notesDiscovered',
+          data: { notes: discoveredNotes, scanPath: '' }
+        });
+      }
+    } catch (error) {
+      vscode.window.showErrorMessage(
+        `Failed to load selected files: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
   private async startNoteScan(scanPath: string, isOldExtensionPath: boolean = false): Promise<void> {
     try {
       vscode.window.showInformationMessage('Scanning for markdown notes...');

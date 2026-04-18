@@ -1358,6 +1358,24 @@ export class ImportService {
   }
 
   /**
+   * Build DiscoveredNote list from explicit file paths (e.g. user picks individual .md files).
+   */
+  async loadSpecificFiles(filePaths: string[]): Promise<DiscoveredNote[]> {
+    const notes: DiscoveredNote[] = [];
+    for (const fp of filePaths) {
+      try {
+        const note = await this.createDiscoveredNote(fp, path.basename(fp));
+        if (note) {
+          notes.push(note);
+        }
+      } catch (error) {
+        console.warn(`Failed to load file ${fp}:`, error);
+      }
+    }
+    return notes.sort((a, b) => b.lastModified.getTime() - a.lastModified.getTime());
+  }
+
+  /**
    * Recursively scan a directory for markdown files
    */
   private async scanDirectory(
