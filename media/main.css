@@ -91,6 +91,9 @@
   z-index: 1;
   visibility: hidden;
   box-sizing: border-box;
+  white-space: break-spaces;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .search-highlights.active {
@@ -98,9 +101,9 @@
 }
 
 .search-highlights .hl-inner {
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow-wrap: break-word;
+  white-space: inherit;
+  word-break: inherit;
+  overflow-wrap: inherit;
   /* transform set in JS to mirror textarea scroll */
   will-change: transform;
 }

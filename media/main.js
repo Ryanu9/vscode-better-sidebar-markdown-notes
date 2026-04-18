@@ -592,7 +592,8 @@
     const cs = window.getComputedStyle(ta);
     const propsToCopy = [
       'font-family', 'font-size', 'font-weight', 'font-style',
-      'line-height', 'letter-spacing', 'tab-size', 'text-indent',
+      'line-height', 'letter-spacing', 'word-spacing', 'tab-size', 'text-indent',
+      'white-space', 'word-break', 'overflow-wrap',
       'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
       'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width',
       'border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style'
