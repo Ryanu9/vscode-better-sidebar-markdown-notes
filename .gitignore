@@ -13,3 +13,4 @@ dist/
 # Personal/debug scripts
 extract-*.js
 monitor-*.js
+.github/copilot-instructions.md

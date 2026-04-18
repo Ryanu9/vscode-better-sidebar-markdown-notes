@@ -48,6 +48,9 @@
 		"onCommand:better-sidebar-markdown-notes.resetMigration",
 		"onCommand:better-sidebar-markdown-notes.openSettings",
 		"onCommand:better-sidebar-markdown-notes.importNotes",
+		"onCommand:better-sidebar-markdown-notes.browseNotes",
+		"onCommand:better-sidebar-markdown-notes.toggleBookmark",
+		"onCommand:better-sidebar-markdown-notes.addNote",
 		"onView:betterSidebarMarkdownNotes.webview"
 	],
 	"main": "./dist/extension.js",
@@ -136,33 +139,83 @@
 				"category": "Sidebar markdown notes",
 				"title": "Import Notes",
 				"icon": "$(cloud-download)"
+			},
+			{
+				"command": "better-sidebar-markdown-notes.browseNotes",
+				"category": "Sidebar markdown notes",
+				"title": "Browse Notes",
+				"icon": "$(list-unordered)"
+			},
+			{
+				"command": "better-sidebar-markdown-notes.toggleBookmark",
+				"category": "Sidebar markdown notes",
+				"title": "Toggle Bookmark",
+				"icon": "$(star-empty)"
+			},
+			{
+				"command": "better-sidebar-markdown-notes.bookmarkAdd",
+				"category": "Sidebar markdown notes",
+				"title": "Bookmark Note",
+				"icon": "$(star-empty)"
+			},
+			{
+				"command": "better-sidebar-markdown-notes.bookmarkRemove",
+				"category": "Sidebar markdown notes",
+				"title": "Remove Bookmark",
+				"icon": "$(star-full)"
+			},
+			{
+				"command": "better-sidebar-markdown-notes.addNote",
+				"category": "Sidebar markdown notes",
+				"title": "Add Note",
+				"icon": "$(add)"
 			}
 		],
 		"menus": {
 			"view/title": [
 				{
-					"command": "better-sidebar-markdown-notes.previousPage",
+					"command": "better-sidebar-markdown-notes.addNote",
 					"group": "navigation@0",
 					"when": "view == betterSidebarMarkdownNotes.webview"
 				},
 				{
-					"command": "better-sidebar-markdown-notes.nextPage",
+					"command": "better-sidebar-markdown-notes.previousPage",
 					"group": "navigation@1",
 					"when": "view == betterSidebarMarkdownNotes.webview"
 				},
 				{
-					"command": "better-sidebar-markdown-notes.togglePreview",
+					"command": "better-sidebar-markdown-notes.nextPage",
 					"group": "navigation@2",
 					"when": "view == betterSidebarMarkdownNotes.webview"
 				},
 				{
-					"command": "better-sidebar-markdown-notes.exportPage",
+					"command": "better-sidebar-markdown-notes.browseNotes",
 					"group": "navigation@3",
 					"when": "view == betterSidebarMarkdownNotes.webview"
 				},
 				{
-					"command": "better-sidebar-markdown-notes.importNotes",
+					"command": "better-sidebar-markdown-notes.bookmarkAdd",
 					"group": "navigation@4",
+					"when": "view == betterSidebarMarkdownNotes.webview && !better-sidebar-markdown-notes.isBookmarked"
+				},
+				{
+					"command": "better-sidebar-markdown-notes.bookmarkRemove",
+					"group": "navigation@4",
+					"when": "view == betterSidebarMarkdownNotes.webview && better-sidebar-markdown-notes.isBookmarked"
+				},
+				{
+					"command": "better-sidebar-markdown-notes.togglePreview",
+					"group": "navigation@5",
+					"when": "view == betterSidebarMarkdownNotes.webview"
+				},
+				{
+					"command": "better-sidebar-markdown-notes.exportPage",
+					"group": "navigation@6",
+					"when": "view == betterSidebarMarkdownNotes.webview"
+				},
+				{
+					"command": "better-sidebar-markdown-notes.importNotes",
+					"group": "navigation@7",
 					"when": "view == betterSidebarMarkdownNotes.webview"
 				}
 			]
@@ -266,7 +319,7 @@
 		"eslint-plugin-import": "^2.22.1",
 		"eslint-plugin-prettier": "^3.1.4",
 		"prettier": "^2.1.2",
-		"ts-loader": "^8.0.11",
+		"ts-loader": "^9.5.7",
 		"typescript": "^4.0.2",
 		"vsce": "^1.81.1",
 		"webpack": "^5.4.0",

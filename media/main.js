@@ -408,6 +408,18 @@
         exportPage();
         break;
       }
+      case 'browseNotes': {
+        openNoteBrowser();
+        break;
+      }
+      case 'toggleBookmark': {
+        toggleBookmark();
+        break;
+      }
+      case 'addNote': {
+        addNewNote();
+        break;
+      }
       case 'initialData': {
         // Received initial data from file storage
         if (message.data) {
@@ -966,9 +978,6 @@
    */
   const updateBookmarkUI = () => {
     const bookmarkButton = document.getElementById('bookmark-note');
-    if (!bookmarkButton) {
-      return;
-    }
 
     // Ensure bookmarks array exists and is correct length
     if (!currentState.bookmarks || currentState.bookmarks.length !== currentState.pages.length) {
@@ -976,6 +985,14 @@
     }
 
     const isBookmarked = currentState.bookmarks[currentState.currentPage] || false;
+
+    // Notify the extension so it can update view/title icon (filled/empty star)
+    vscode.postMessage({ type: 'bookmarkStateChanged', value: isBookmarked });
+
+    if (!bookmarkButton) {
+      return;
+    }
+
     const starIcon = bookmarkButton.querySelector('.star-icon path');
     
     if (isBookmarked) {

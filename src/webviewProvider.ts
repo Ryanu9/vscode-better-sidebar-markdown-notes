@@ -125,6 +125,14 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
           await this.handleBulkSetBookmarks(data.indices, data.value);
           break;
         }
+        case 'bookmarkStateChanged': {
+          vscode.commands.executeCommand(
+            'setContext',
+            'better-sidebar-markdown-notes.isBookmarked',
+            !!data.value
+          );
+          break;
+        }
       }
     });
 
@@ -163,6 +171,24 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
   public exportPage() {
     if (this._view) {
       this._view.webview.postMessage({ type: 'exportPage' });
+    }
+  }
+
+  public addNote() {
+    if (this._view) {
+      this._view.webview.postMessage({ type: 'addNote' });
+    }
+  }
+
+  public browseNotes() {
+    if (this._view) {
+      this._view.webview.postMessage({ type: 'browseNotes' });
+    }
+  }
+
+  public toggleBookmark() {
+    if (this._view) {
+      this._view.webview.postMessage({ type: 'toggleBookmark' });
     }
   }
 
@@ -1135,28 +1161,7 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
 				<title>Workspace Sidebar Notes</title>
 			</head>
       <body>
-        <div id="toolbar">
-          <button id="add-new-note" class="toolbar-button" title="Add a new note">
-            <span class="codicon codicon-add"></span>
-            Add Note
-          </button>
-          <button id="prev-note-toolbar" class="toolbar-button nav-arrow" title="Previous note">
-            <span class="codicon codicon-chevron-left"></span>
-          </button>
-          <button id="browse-notes-button" class="toolbar-button" title="Browse and navigate notes">
-            <span class="codicon codicon-list-unordered"></span>
-            Browse Notes
-          </button>
-          <button id="next-note-toolbar" class="toolbar-button nav-arrow" title="Next note">
-            <span class="codicon codicon-chevron-right"></span>
-          </button>
-          <button id="bookmark-note" class="toolbar-button" title="Bookmark this note">
-            <svg class="star-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M8 1L10.163 5.381L15 6.134L11.5 9.548L12.326 14.366L8 12.096L3.674 14.366L4.5 9.548L1 6.134L5.837 5.381L8 1Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-            </svg>
-          </button>
-          <div id="save-status" class="save-status"></div>
-        </div>
+        <div id="save-status" class="save-status"></div>
 
         <!-- Note Browser Modal -->
         <div id="note-browser-modal" class="modal hidden">

@@ -90,6 +90,37 @@ export function activate(context: vscode.ExtensionContext) {
       await provider.importNotes();
     })
   );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('better-sidebar-markdown-notes.browseNotes', () => {
+      provider.browseNotes();
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('better-sidebar-markdown-notes.toggleBookmark', () => {
+      provider.toggleBookmark();
+    })
+  );
+
+  // Menu-only aliases that share icon-state via `when` context
+  context.subscriptions.push(
+    vscode.commands.registerCommand('better-sidebar-markdown-notes.bookmarkAdd', () => {
+      provider.toggleBookmark();
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('better-sidebar-markdown-notes.bookmarkRemove', () => {
+      provider.toggleBookmark();
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('better-sidebar-markdown-notes.addNote', () => {
+      provider.addNote();
+    })
+  );
 }
 
 // this method is called when your extension is deactivated
