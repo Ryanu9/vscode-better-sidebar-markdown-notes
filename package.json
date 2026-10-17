@@ -59,7 +59,7 @@
 			"activitybar": [
 				{
 					"id": "betterSidebarMarkdownNotes",
-					"title": "Markdown Notes",
+					"title": "Notes",
 					"icon": "$(notebook)"
 				}
 			]

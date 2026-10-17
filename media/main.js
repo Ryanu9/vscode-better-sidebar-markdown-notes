@@ -28,18 +28,32 @@
     }, secondsToHide || 3000);
   };
 
-  const initialState = {
+  // A fresh object every time: state objects get mutated (e.g. bookmarks), so a shared
+  // template would leak changes into later resets
+  const createInitialState = () => ({
     state: 'editor',
     currentPage: 0,
     pages: [''], // Start with one empty page
     version: 1
-  };
+  });
 
   // State management for file-based storage
-  let currentState = initialState;
+  let currentState = createInitialState();
   let isInitialized = false;
-  let autoSaveTimeout;
-  let pendingSave = false;
+  let autoSaveTimeout = null;
+  // Generation of the data last received from the extension. Sent back with every save so the
+  // extension can drop saves built on data it has replaced since (reload, restore, ...).
+  let dataGeneration = -1;
+
+  // Settings from the extension (getWebviewConfig in webviewProvider.ts)
+  let webviewConfig = typeof config === 'object' && config ? config : {};
+
+  const applyLayoutConfig = () => {
+    const padding = webviewConfig.leftMargin === true ? '20px' : '0px';
+    document.getElementById('render').style.paddingLeft = padding;
+    document.getElementById('content').style.paddingLeft = padding;
+  };
+  applyLayoutConfig();
 
   // Browse notes modal selection state
   let browserSelectedNotes = new Set(); // Set of selected note indices
@@ -136,6 +150,10 @@
           editorElement.classList.remove('hidden');
         }
         renderElement.classList.add('hidden');
+
+        // Setting .value fires no 'input' event, so redraw the bold layer here (after the
+        // editor is visible, as it measures the textarea)
+        renderEditorSyntax();
         break;
       }
     }
@@ -191,7 +209,7 @@
 
     // Save to file-based storage if initialized
     if (isInitialized) {
-      scheduleAutoSave(newState);
+      scheduleAutoSave();
     }
   };
 
@@ -219,31 +237,40 @@
     }
   };
 
-  // Schedule auto-save with debouncing (increased to 2-3 seconds)
-  const scheduleAutoSave = (state) => {
-    if (pendingSave) {
-      return;
-    }
-
+  const cancelAutoSave = () => {
     if (autoSaveTimeout) {
       clearTimeout(autoSaveTimeout);
+      autoSaveTimeout = null;
     }
-
-  // Do not write 'Auto-saving...' into the top toolbar to avoid layout shift.
-  // Auto-save success will show a bottom toast; keep top status reserved for manual saves/errors.
-
-    autoSaveTimeout = setTimeout(() => {
-      saveToFile(state, true); // true indicates auto-save
-    }, 2500); // 2.5 second debounce for better UX
   };
 
-  // Save state to file
-  const saveToFile = (state, isAutoSave = false) => {
-    if (pendingSave) {
+  // Schedule auto-save with debouncing (storage.autoSave / storage.autoSaveInterval settings).
+  // The timer saves whatever is current when it fires, never a state captured now, so a later
+  // change (e.g. a bookmark) can't be reverted by an older pending save.
+  const scheduleAutoSave = () => {
+    if (webviewConfig.autoSave === false) {
       return;
     }
 
-    pendingSave = true;
+    cancelAutoSave();
+
+    // Do not write 'Auto-saving...' into the top toolbar to avoid layout shift.
+    // Auto-save success will show a bottom toast; keep top status reserved for manual saves/errors.
+
+    const interval = Math.min(10000, Math.max(100, Number(webviewConfig.autoSaveInterval) || 1000));
+    autoSaveTimeout = setTimeout(() => {
+      autoSaveTimeout = null;
+      // Apply typed text the content debounce hasn't picked up yet
+      debouncedSaveContent.flush();
+      saveToFile(currentState, true); // true indicates auto-save
+    }, interval);
+  };
+
+  // Save state to file. Never skipped: the extension writes saves one after another, so a save
+  // sent while the previous one is still running is simply applied after it.
+  const saveToFile = (state, isAutoSave = false) => {
+    // This save supersedes a pending auto-save
+    cancelAutoSave();
 
     // Update UI
     if (saveButton) {
@@ -251,19 +278,18 @@
     }
 
     // Do not show top 'Saving...' status (use bottom toast for both auto and manual saves).
-    // Keep the save button disabled while pending; errors will still use the top save status.
+    // Keep the save button disabled briefly; errors will still use the top save status.
 
     const fileData = convertToFileFormat(state);
 
     vscode.postMessage({
       type: 'saveNotes',
       value: fileData,
-      isAutoSave: isAutoSave
+      isAutoSave: isAutoSave,
+      generation: dataGeneration
     });
 
-    // Reset pending flag after a delay
     setTimeout(() => {
-      pendingSave = false;
       if (saveButton) {
         saveButton.disabled = false;
       }
@@ -272,17 +298,38 @@
 
   // Manual save function
   const manualSave = () => {
-    if (pendingSave) {
+    debouncedSaveContent.flush();
+    saveToFile(currentState, false);
+  };
+
+  // Save right away if an auto-save is pending, e.g. when focus leaves the notes or the view
+  // is hidden, so closing VS Code shortly after typing doesn't lose the last edits
+  const flushPendingAutoSave = () => {
+    if (!autoSaveTimeout) {
       return;
     }
+    debouncedSaveContent.flush();
+    saveToFile(currentState, true);
+  };
 
-    // Clear any pending auto-save
-    if (autoSaveTimeout) {
-      clearTimeout(autoSaveTimeout);
-      autoSaveTimeout = null;
+  window.addEventListener('blur', flushPendingAutoSave);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      flushPendingAutoSave();
     }
+  });
 
-    saveToFile(currentState, false);
+  // Replace local notes with data pushed by the extension. Pending saves of the old state are
+  // cancelled; ones already sent are rejected by the extension thanks to the new generation.
+  const applyNotesFromExtension = (message) => {
+    cancelAutoSave();
+    debouncedSaveContent.cancel();
+    if (typeof message.generation === 'number') {
+      dataGeneration = message.generation;
+    }
+    currentState = convertFromFileFormat(message.data);
+    isInitialized = true;
+    renderView();
   };
 
   // Load initial data from file
@@ -418,7 +465,10 @@
         break;
       }
       case 'resetData': {
-        saveState(initialState);
+        // The extension already confirmed with the user and backed up the notes
+        debouncedSaveContent.cancel();
+        saveState(createInitialState());
+        saveToFile(currentState, false);
         break;
       }
       case 'exportPage': {
@@ -439,11 +489,12 @@
       }
       case 'initialData': {
         // Received initial data from file storage
+        if (typeof message.generation === 'number') {
+          dataGeneration = message.generation;
+        }
         if (message.data) {
-          currentState = convertFromFileFormat(message.data);
-          isInitialized = true;
+          applyNotesFromExtension(message);
           showNoWorkspaceMessage(false);
-          renderView();
         } else {
           // No file data, check for legacy webview state
           const legacyState = vscode.getState();
@@ -455,7 +506,7 @@
             });
           } else {
             // Use initial state
-            currentState = initialState;
+            currentState = createInitialState();
             isInitialized = true;
             showNoWorkspaceMessage(false);
             renderView();
@@ -481,30 +532,25 @@
         loadInitialData();
         break;
       }
-      case 'notesLoaded': {
-        // Notes loaded from file
-        if (message.data) {
-          currentState = convertFromFileFormat(message.data);
-          isInitialized = true;
-          renderView();
-        }
-        break;
-      }
-      case 'notesRestored': {
-        // Notes restored from backup
-        if (message.data) {
-          currentState = convertFromFileFormat(message.data);
-          isInitialized = true;
-          renderView();
-        }
-        break;
-      }
+      case 'notesLoaded': // Notes loaded from file
+      case 'notesRestored': // Notes restored from backup
       case 'migrationComplete': {
-        // Migration completed
         if (message.data) {
-          currentState = convertFromFileFormat(message.data);
-          isInitialized = true;
-          renderView();
+          applyNotesFromExtension(message);
+        }
+        break;
+      }
+      case 'requestSave': {
+        // The user chose to keep this version over an externally changed file
+        debouncedSaveContent.flush();
+        saveToFile(currentState, true);
+        break;
+      }
+      case 'configChanged': {
+        webviewConfig = message.value || {};
+        applyLayoutConfig();
+        if (webviewConfig.autoSave === false) {
+          cancelAutoSave();
         }
         break;
       }
@@ -555,41 +601,42 @@
         handleImportResult(message.data);
         break;
       }
-      case 'bookmarkToggled': {
-        // Handle bookmark toggle response from extension
-        if (message.data) {
-          currentState = convertFromFileFormat(message.data);
-          updateBookmarkUI();
-          // Update bookmark icons in browse notes modal if it's open
-          const modal = document.getElementById('note-browser-modal');
-          if (modal && !modal.classList.contains('hidden')) {
-            updateBrowserBookmarkIcons();
-          }
+    }
+  });
+
+  // ============== Bold in the editor (**text**) ==============
+
+  // Finds **bold** spans the way the preview renders them: within one line, not inside inline
+  // code or fenced code blocks. `open` is the index of the opening **, `close` the index just
+  // after the closing **.
+  const findBoldSpans = (text) => {
+    const spans = [];
+    const boldRe = /\*\*(?=[^\s*])(.*?[^\s*])\*\*/g;
+    let inFence = false;
+    let lineStart = 0;
+    text.split('\n').forEach((line) => {
+      if (/^ {0,3}(```|~~~)/.test(line)) {
+        inFence = !inFence;
+      } else if (!inFence) {
+        // Blank out inline code so ** inside it doesn't count
+        const masked = line.replace(/(`+)[^`][\s\S]*?\1/g, (m) => ' '.repeat(m.length));
+        boldRe.lastIndex = 0;
+        let m;
+        while ((m = boldRe.exec(masked)) !== null) {
+          const open = lineStart + m.index;
+          const close = open + m[0].length;
+          spans.push({ open, contentStart: open + 2, contentEnd: close - 2, close });
         }
-        break;
       }
-    }
-  });
+      lineStart += line.length + 1;
+    });
+    return spans;
+  };
 
-  document.getElementById('text-input').addEventListener('keydown', (event) => {
-    if (event.key === 'Tab') {
-      // prevent the focus lose on tab press
-      event.preventDefault();
-    }
-  });
+  const escapeMirrorHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-  // ============== In-page search (Ctrl+F) ==============
-  const searchState = { matches: [], current: -1, caseSensitive: false, query: '', composing: false };
-
-  const searchBar = () => document.getElementById('search-bar');
-  const searchInput = () => document.getElementById('search-input');
-  const searchCount = () => document.getElementById('search-count');
-  const highlightsLayer = () => document.getElementById('search-highlights');
-
-  const syncHighlightStyle = () => {
-    const ta = document.getElementById('text-input');
-    const layer = highlightsLayer();
-    if (!ta || !layer) return;
+  // Make a mirror layer cover the textarea's content area with identical text metrics
+  const syncMirrorStyle = (ta, layer) => {
     const cs = window.getComputedStyle(ta);
     const propsToCopy = [
       'font-family', 'font-size', 'font-weight', 'font-style',
@@ -610,6 +657,210 @@
     const bb = parseFloat(cs.borderBottomWidth) || 0;
     layer.style.width = (ta.clientWidth + bl + br) + 'px';
     layer.style.height = (ta.clientHeight + bt + bb) + 'px';
+  };
+
+  const syncEditorSyntaxScroll = () => {
+    const ta = document.getElementById('text-input');
+    const layer = document.getElementById('editor-syntax');
+    const inner = layer && layer.firstElementChild;
+    if (ta && inner) {
+      inner.style.transform = `translate(${-ta.scrollLeft}px, ${-ta.scrollTop}px)`;
+    }
+  };
+
+  // Draw the editor text with bold spans styled. The layer sits on top of the textarea (which
+  // keeps the caret and selection, its own text made transparent via .syntax-on). If anything
+  // fails, the class is removed and the textarea shows its plain text again.
+  const renderEditorSyntax = () => {
+    const ta = document.getElementById('text-input');
+    const layer = document.getElementById('editor-syntax');
+    if (!ta || !layer) {
+      return;
+    }
+    try {
+      syncMirrorStyle(ta, layer);
+      const text = ta.value;
+      let html = '';
+      let cursor = 0;
+      findBoldSpans(text).forEach((s) => {
+        html +=
+          escapeMirrorHtml(text.slice(cursor, s.open)) +
+          '<span class="md-marker">**</span><span class="md-strong">' +
+          escapeMirrorHtml(text.slice(s.contentStart, s.contentEnd)) +
+          '</span><span class="md-marker">**</span>';
+        cursor = s.close;
+      });
+      html += escapeMirrorHtml(text.slice(cursor));
+      layer.innerHTML = '<div class="syntax-inner">' + html + '</div>';
+      ta.classList.add('syntax-on');
+      syncEditorSyntaxScroll();
+    } catch (err) {
+      ta.classList.remove('syntax-on');
+      console.warn('[Editor] bold rendering failed:', err);
+    }
+  };
+
+  // Replace textarea[start, end) with text, keeping native undo (Ctrl+Z) working and firing the
+  // usual 'input' event (auto-save, search refresh, bold rendering)
+  const replaceTextareaRange = (textarea, start, end, text) => {
+    textarea.focus();
+    textarea.setSelectionRange(start, end);
+    if (!document.execCommand('insertText', false, text)) {
+      textarea.setRangeText(text, start, end, 'end');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  };
+
+  // Ctrl+B, applied to the selected part of each line (surrounding whitespace excluded,
+  // "**word **" is not bold in markdown):
+  // - every part already inside a bold span -> remove that span's bold
+  // - otherwise -> make it bold, merging with bold spans it touches and dropping their inner
+  //   markers, so bold never ends up nested ("a**b**c" -> "**abc**", not "**a**b**c**")
+  // - no selection: inside bold -> unbold it, otherwise insert **** with the caret in between
+  const toggleBold = (textarea) => {
+    const marker = '**';
+    const value = textarea.value;
+    const selStart = textarea.selectionStart;
+    const selEnd = textarea.selectionEnd;
+    const spans = findBoldSpans(value);
+
+    if (selStart === selEnd) {
+      const span = spans.find((s) => s.contentStart <= selStart && selStart <= s.contentEnd);
+      if (span) {
+        replaceTextareaRange(textarea, span.open, span.close, value.slice(span.contentStart, span.contentEnd));
+        textarea.setSelectionRange(selStart - marker.length, selStart - marker.length);
+      } else if (value.slice(selStart - marker.length, selStart + marker.length) === marker + marker) {
+        // Empty pair left by a previous Ctrl+B
+        replaceTextareaRange(textarea, selStart - marker.length, selStart + marker.length, '');
+        textarea.setSelectionRange(selStart - marker.length, selStart - marker.length);
+      } else {
+        replaceTextareaRange(textarea, selStart, selStart, marker + marker);
+        textarea.setSelectionRange(selStart + marker.length, selStart + marker.length);
+      }
+      return;
+    }
+
+    // Selected part of each line, trimmed
+    const parts = [];
+    let lineStart = selStart === 0 ? 0 : value.lastIndexOf('\n', selStart - 1) + 1;
+    while (lineStart < selEnd) {
+      let lineEnd = value.indexOf('\n', lineStart);
+      if (lineEnd === -1) {
+        lineEnd = value.length;
+      }
+      let s = Math.max(lineStart, selStart);
+      let e = Math.min(lineEnd, selEnd);
+      while (s < e && /\s/.test(value[s])) {
+        s++;
+      }
+      while (e > s && /\s/.test(value[e - 1])) {
+        e--;
+      }
+      if (s < e) {
+        parts.push({ s, e });
+      }
+      lineStart = lineEnd + 1;
+    }
+    if (parts.length === 0) {
+      return;
+    }
+
+    // The bold span a part is in (or exactly covers, markers included)
+    const boldSpanOf = (p) =>
+      spans.find((sp) => (sp.contentStart <= p.s && p.e <= sp.contentEnd) || (sp.open === p.s && sp.close === p.e));
+    const unbold = parts.every((p) => boldSpanOf(p));
+
+    // Each edit replaces value[start, end) with text; [cs, ce) is the part of text to select afterwards
+    const edits = parts.map((p) => {
+      if (unbold) {
+        const sp = boldSpanOf(p);
+        const content = value.slice(sp.contentStart, sp.contentEnd);
+        return { start: sp.open, end: sp.close, text: content, cs: 0, ce: content.length };
+      }
+      const touching = spans.filter((sp) => sp.open <= p.e && sp.close >= p.s);
+      const start = Math.min(p.s, ...touching.map((sp) => sp.open));
+      const end = Math.max(p.e, ...touching.map((sp) => sp.close));
+      let inner = '';
+      let cursor = start;
+      touching.forEach((sp) => {
+        inner += value.slice(cursor, sp.open) + value.slice(sp.contentStart, sp.contentEnd);
+        cursor = sp.close;
+      });
+      inner += value.slice(cursor, end);
+      return { start, end, text: marker + inner + marker, cs: marker.length, ce: marker.length + inner.length };
+    });
+
+    // Apply all edits as one replacement so a single Ctrl+Z undoes them
+    const regionStart = edits[0].start;
+    const regionEnd = edits[edits.length - 1].end;
+    let out = '';
+    let prevEnd = regionStart;
+    let newSelStart = 0;
+    let newSelEnd = 0;
+    edits.forEach((ed, i) => {
+      out += value.slice(prevEnd, ed.start);
+      const at = regionStart + out.length;
+      if (i === 0) {
+        newSelStart = at + ed.cs;
+      }
+      newSelEnd = at + ed.ce;
+      out += ed.text;
+      prevEnd = ed.end;
+    });
+    replaceTextareaRange(textarea, regionStart, regionEnd, out);
+    textarea.setSelectionRange(newSelStart, newSelEnd);
+  };
+
+  document.getElementById('text-input').addEventListener('keydown', (event) => {
+    if (event.key === 'Tab') {
+      // prevent the focus lose on tab press
+      event.preventDefault();
+    }
+
+    const isBold =
+      (event.ctrlKey || event.metaKey) &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.isComposing &&
+      event.key &&
+      event.key.toLowerCase() === 'b';
+    if (isBold) {
+      event.preventDefault();
+      // Keep it from reaching VS Code, where Ctrl+B toggles the side bar
+      event.stopPropagation();
+      toggleBold(event.target);
+    }
+  });
+
+  // Keep the bold layer in step with the textarea
+  try {
+    const ta = document.getElementById('text-input');
+    ta.addEventListener('input', renderEditorSyntax);
+    ta.addEventListener('scroll', syncEditorSyntaxScroll);
+    // Width changes (side bar resized, scrollbar appearing) change line wrapping
+    if (typeof ResizeObserver === 'function') {
+      new ResizeObserver(() => renderEditorSyntax()).observe(ta);
+    } else {
+      window.addEventListener('resize', renderEditorSyntax);
+    }
+  } catch (err) {
+    console.warn('[Editor] bold layer setup failed:', err);
+  }
+  // ============== End bold in the editor ==============
+
+  // ============== In-page search (Ctrl+F) ==============
+  const searchState = { matches: [], current: -1, caseSensitive: false, query: '', composing: false };
+
+  const searchBar = () => document.getElementById('search-bar');
+  const searchInput = () => document.getElementById('search-input');
+  const searchCount = () => document.getElementById('search-count');
+  const highlightsLayer = () => document.getElementById('search-highlights');
+
+  const syncHighlightStyle = () => {
+    const ta = document.getElementById('text-input');
+    const layer = highlightsLayer();
+    if (!ta || !layer) return;
+    syncMirrorStyle(ta, layer);
   };
 
   const renderHighlights = () => {
@@ -1003,7 +1254,7 @@
 
     // Trigger auto-save if initialized
     if (isInitialized) {
-      scheduleAutoSave(currentState);
+      scheduleAutoSave();
     }
 
     // Re-run search if search bar is open (do NOT jump to first match — preserve cursor position).
@@ -1195,10 +1446,7 @@
         bookmarkBtn.addEventListener('click', (e) => {
           e.stopPropagation();
           // Toggle bookmark for this note
-          vscode.postMessage({
-            type: 'toggleBookmark',
-            pageIndex: index
-          });
+          setBookmarks([index], !isPageBookmarked(index));
         });
       }
 
@@ -1330,8 +1578,7 @@
     if (browserSelectedNotes.size === 0) {
       return;
     }
-    const indices = Array.from(browserSelectedNotes);
-    vscode.postMessage({ type: 'bulkSetBookmarks', indices, value });
+    setBookmarks(Array.from(browserSelectedNotes), value);
   };
 
   /**
@@ -1412,10 +1659,39 @@
    */
   const toggleBookmark = () => {
     const pageIndex = currentState.currentPage;
-    vscode.postMessage({
-      type: 'toggleBookmark',
-      pageIndex: pageIndex
+    setBookmarks([pageIndex], !isPageBookmarked(pageIndex));
+  };
+
+  const isPageBookmarked = (index) => !!(currentState.bookmarks && currentState.bookmarks[index]);
+
+  /**
+   * Set the bookmark flag of the given pages. Bookmarks are part of the notes state and are
+   * saved through the same path as the text, so a bookmark change and an edit can't overwrite
+   * each other.
+   */
+  const setBookmarks = (indices, value) => {
+    // Apply typed text the content debounce hasn't picked up yet, so it is saved too
+    debouncedSaveContent.flush();
+
+    const bookmarks =
+      currentState.bookmarks && currentState.bookmarks.length === currentState.pages.length
+        ? [...currentState.bookmarks]
+        : new Array(currentState.pages.length).fill(false);
+    indices.forEach((index) => {
+      if (index >= 0 && index < bookmarks.length) {
+        bookmarks[index] = value;
+      }
     });
+    currentState = { ...currentState, bookmarks };
+
+    updateBookmarkUI();
+    // Update bookmark icons in browse notes modal if it's open
+    const modal = document.getElementById('note-browser-modal');
+    if (modal && !modal.classList.contains('hidden')) {
+      updateBrowserBookmarkIcons();
+    }
+
+    saveToFile(currentState, true);
   };
 
   /**
@@ -1844,6 +2120,13 @@
     }
 
       const notesToImport = Array.from(selectedNotes).map((index) => discoveredNotes[index]);
+
+    // The import is written on top of the notes file and then reloaded, so save the current
+    // edits first (the extension runs the import after this save)
+    if (isInitialized) {
+      debouncedSaveContent.flush();
+      saveToFile(currentState, true);
+    }
 
     // Send import request to extension
     vscode.postMessage({

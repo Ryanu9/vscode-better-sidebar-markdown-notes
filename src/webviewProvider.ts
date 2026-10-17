@@ -13,11 +13,20 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
   public static readonly viewId = 'betterSidebarMarkdownNotes.webview';
 
   private _view?: vscode.WebviewView;
-  private config = getConfig();
   private storageService: StorageService;
   private migrationService: MigrationService;
   private importService: ImportService;
-  private autoSaveTimeout?: NodeJS.Timeout;
+  private configListener?: vscode.Disposable;
+  private storageReloadTimer?: NodeJS.Timeout;
+  // Storage writes run one at a time; interleaved writes break mtime-based conflict detection
+  private writeQueue: Promise<void> = Promise.resolve();
+  // Bumped whenever notes data is pushed into the webview. The webview echoes it with every
+  // save, so saves built on data that has since been replaced are dropped.
+  private dataGeneration = 0;
+  // Only one conflict / external-change prompt at a time
+  private conflictPromptOpen = false;
+  // Latest webview state that could not be saved because of a conflict (used by "Merge")
+  private pendingLocalData?: NotesData;
 
   constructor(
     private readonly _extensionUri: vscode.Uri,
@@ -54,12 +63,7 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
     webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
 
     // Setup file watcher for external changes after webview is ready
-    const config = getConfig();
-    if (config.sync.enableFileWatcher) {
-      this.storageService.setupFileWatcher(() => {
-        this.handleExternalFileChange();
-      });
-    }
+    this.setupFileWatcher();
 
     webviewView.webview.onDidReceiveMessage(async (data) => {
       switch (data.type) {
@@ -82,7 +86,7 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
           break;
         }
         case 'saveNotes': {
-          await this.handleSaveNotes(data.value, data.isAutoSave || false);
+          await this.enqueueWrite(() => this.handleSaveNotes(data.value, data.isAutoSave || false, data.generation));
           break;
         }
         case 'loadNotes': {
@@ -118,15 +122,8 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
           break;
         }
         case 'importSelectedNotes': {
-          await this.handleImportSelectedNotes(data.value);
-          break;
-        }
-        case 'toggleBookmark': {
-          await this.handleToggleBookmark(data.pageIndex, data.value);
-          break;
-        }
-        case 'bulkSetBookmarks': {
-          await this.handleBulkSetBookmarks(data.indices, data.value);
+          // Queued behind the webview's own pending saves so the import builds on its latest edits
+          await this.enqueueWrite(() => this.handleImportSelectedNotes(data.value));
           break;
         }
         case 'bookmarkStateChanged': {
@@ -140,18 +137,55 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
       }
     });
 
-    vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('better-sidebar-markdown-notes')) {
-        this.config = getConfig();
-        webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
+    this.configListener?.dispose();
+    this.configListener = vscode.workspace.onDidChangeConfiguration((e) => {
+      const section = 'better-sidebar-markdown-notes';
+      if (!e.affectsConfiguration(section)) {
+        return;
       }
+
+      if (
+        e.affectsConfiguration(`${section}.storage.location`) ||
+        e.affectsConfiguration(`${section}.storage.customPath`)
+      ) {
+        this.scheduleStorageReload();
+      }
+
+      if (e.affectsConfiguration(`${section}.sync.enableFileWatcher`)) {
+        this.setupFileWatcher();
+      }
+
+      // Applied in place: rebuilding the HTML would throw away edits that are not saved yet
+      webviewView.webview.postMessage({ type: 'configChanged', value: this.getWebviewConfig() });
     });
+    this.context.subscriptions.push(this.configListener);
   }
 
-  public resetData() {
-    if (this._view) {
-      this._view.webview.postMessage({ type: 'resetData' });
+  public async resetData() {
+    if (!this._view) {
+      return;
     }
+
+    const backupNote = getConfig().backup.enabled ? ' A backup of the current notes is created first.' : '';
+    const confirm = await vscode.window.showWarningMessage(
+      `Reset all notes? Every page will be deleted.${backupNote}`,
+      { modal: true },
+      'Reset'
+    );
+    if (confirm !== 'Reset') {
+      return;
+    }
+
+    try {
+      await this.enqueueWrite(async () => {
+        await this.storageService.createBackup();
+      });
+    } catch (error) {
+      vscode.window.showErrorMessage(`Reset cancelled: failed to back up notes: ${error}`);
+      return;
+    }
+
+    this._view.webview.postMessage({ type: 'resetData' });
   }
 
   public togglePreview() {
@@ -197,25 +231,72 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
   }
 
   /**
+   * Run a storage write after all previously queued ones finish
+   */
+  private enqueueWrite(task: () => Promise<void>): Promise<void> {
+    const run = this.writeQueue.then(task);
+    this.writeQueue = run.catch(() => undefined);
+    return run;
+  }
+
+  /**
+   * Replace the webview's notes with `data`. Bumps the data generation so saves the webview
+   * sent before receiving this data are dropped instead of overwriting it.
+   */
+  private postNotesToWebview(type: string, data: NotesData): void {
+    this.dataGeneration++;
+    if (this._view) {
+      this._view.webview.postMessage({ type, data, generation: this.dataGeneration });
+    }
+  }
+
+  private setupFileWatcher(): void {
+    this.storageService.disposeFileWatcher();
+    if (getConfig().sync.enableFileWatcher) {
+      this.storageService.setupFileWatcher(() => this.handleExternalFileChange());
+    }
+  }
+
+  /**
+   * Switch to the storage location in the current settings. Debounced because changing the
+   * location fires one configuration event per updated setting.
+   */
+  private scheduleStorageReload(): void {
+    if (this.storageReloadTimer) {
+      clearTimeout(this.storageReloadTimer);
+    }
+
+    this.storageReloadTimer = setTimeout(() => {
+      this.storageReloadTimer = undefined;
+
+      // Saves already sent by the webview belong to the old location: drop them
+      this.dataGeneration++;
+
+      // A fresh StorageService has no known mtime, so an existing file at the new location
+      // is never overwritten before it has been loaded
+      this.storageService.disposeFileWatcher();
+      this.storageService = new StorageService(this.context);
+      this.migrationService = new MigrationService(this.context, this.storageService);
+      this.importService = new ImportService(this.context, this.storageService);
+      this.setupFileWatcher();
+
+      this.handleInitialDataRequest();
+    }, 300);
+  }
+
+  /**
    * Handle saving notes to file storage
    */
-  private async handleSaveNotes(notesData: NotesData, isAutoSave: boolean = false): Promise<void> {
+  private async handleSaveNotes(notesData: NotesData, isAutoSave: boolean, generation: number): Promise<void> {
+    if (generation !== this.dataGeneration) {
+      // Built on data that has since been replaced (reload, restore, conflict resolution...)
+      console.log('[WebviewProvider] Dropping stale save from webview');
+      return;
+    }
+
     try {
-      // Check for SyncThing conflict files before saving
-      const conflictFiles = await this.storageService.checkForSyncThingConflicts();
-      
-      if (conflictFiles.length > 0 && !isAutoSave) {
-        // Prompt user to resolve SyncThing conflicts
-        await this.handleSyncThingConflicts(conflictFiles);
-        return;
-      }
-
       await this.storageService.saveNotes(notesData);
-
-      // Clear any existing auto-save timeout
-      if (this.autoSaveTimeout) {
-        clearTimeout(this.autoSaveTimeout);
-      }
+      this.pendingLocalData = undefined;
 
       // Update status bar (less intrusive for auto-saves)
       if (isAutoSave) {
@@ -235,18 +316,20 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-      console.error('Failed to save notes:', error);
 
       // Handle conflicts specially
       if (errorMsg === 'CONFLICT_DETECTED' || errorMsg === 'CONFLICT_EXTERNAL_NEWER') {
-        if (!isAutoSave) {
-          await this.handleSaveConflict(notesData, errorMsg === 'CONFLICT_EXTERNAL_NEWER');
-        } else {
-          // For auto-save, just skip and notify
-          this.updateStatusBar('$(warning) Conflict detected - please refresh');
+        // Keep the newest unsaved local state for "Merge"
+        this.pendingLocalData = notesData;
+        this.updateStatusBar('$(warning) Notes changed on disk - not saved');
+        if (!this.conflictPromptOpen) {
+          // Not awaited: the write queue must not wait for the user
+          this.handleSaveConflict(errorMsg === 'CONFLICT_EXTERNAL_NEWER');
         }
         return;
       }
+
+      console.error('Failed to save notes:', error);
 
       // Show error message only for manual saves to avoid spam
       if (!isAutoSave) {
@@ -261,6 +344,16 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
           isAutoSave: isAutoSave
         });
       }
+      return;
+    }
+
+    // Look for SyncThing conflict files on manual saves. Done after saving, so the local
+    // edits are on disk (and covered by any resolution) before the user is asked.
+    if (!isAutoSave && getConfig().sync.checkSyncThingConflicts && !this.conflictPromptOpen) {
+      const conflictFiles = await this.storageService.checkForSyncThingConflicts();
+      if (conflictFiles.length > 0) {
+        this.handleSyncThingConflicts(conflictFiles);
+      }
     }
   }
 
@@ -271,11 +364,8 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
     try {
       const notesData = await this.storageService.loadNotes();
 
-      if (this._view && notesData) {
-        this._view.webview.postMessage({
-          type: 'notesLoaded',
-          data: notesData
-        });
+      if (notesData) {
+        this.postNotesToWebview('notesLoaded', notesData);
       }
     } catch (error) {
       console.error('Failed to load notes:', error);
@@ -296,36 +386,18 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
    */
   private async handleInitialDataRequest(): Promise<void> {
     try {
-      // Check if no workspace is open
+      // Without a workspace, notes can only be stored at a configured custom path
       const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-
-      // If no workspace is open, check if user configured a custom storage path
       const config = getConfig();
-      if (!workspaceFolder) {
-        if (config.storage.location === 'custom' && config.storage.customPath) {
-          // Reinitialize storage/migration/import services to respect new custom path
-          this.config = config;
-          this.storageService = new StorageService(this.context);
-          this.migrationService = new MigrationService(this.context, this.storageService);
-          this.importService = new ImportService(this.context, this.storageService);
-
-          // Setup file watcher if enabled
-          if (this.config.sync.enableFileWatcher) {
-            this.storageService.setupFileWatcher(() => this.handleExternalFileChange());
-          }
-
-          // Continue to migration/loading below using the custom path
-        } else {
-          // No workspace and no custom path set - tell webview to show the prompt
-          if (this._view) {
-            this._view.webview.postMessage({ type: 'noWorkspace' });
-          }
-          return;
+      if (!workspaceFolder && !(config.storage.location === 'custom' && config.storage.customPath)) {
+        // No workspace and no custom path set - tell webview to show the prompt
+        if (this._view) {
+          this._view.webview.postMessage({ type: 'noWorkspace' });
         }
+        return;
       }
 
       // Check for SyncThing conflicts first
-      // Config already retrieved earlier; use it
       if (config.sync.checkSyncThingConflicts) {
         const conflictFiles = await this.storageService.checkForSyncThingConflicts();
         if (conflictFiles.length > 0) {
@@ -335,7 +407,7 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
             'Resolve Conflicts',
             'Ignore for Now'
           );
-          
+
           if (choice === 'Resolve Conflicts') {
             await this.handleSyncThingConflicts(conflictFiles);
           }
@@ -343,25 +415,11 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
       }
 
       // Check for migration and load data
-  const notesData = await this.migrationService.checkAndMigrate();
+      const notesData = await this.migrationService.checkAndMigrate();
 
-      if (this._view) {
-        this._view.webview.postMessage({
-          type: 'initialData',
-          data: notesData
-        });
-      }
+      this.postNotesToWebview('initialData', notesData);
     } catch (error) {
       console.error('Failed to get initial data:', error);
-
-      // Check if it's a "no workspace" error from storage service
-      if (error instanceof Error && error.message.includes('No workspace folder found')) {
-        if (this._view) {
-          this._view.webview.postMessage({ type: 'noWorkspace' });
-        }
-        return;
-      }
-
       vscode.window.showErrorMessage(`Failed to initialize notes: ${error}`);
     }
   }
@@ -377,12 +435,7 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
       // Perform migration
       const migratedData = await this.migrationService.forceMigration(legacyData);
 
-      if (this._view) {
-        this._view.webview.postMessage({
-          type: 'migrationComplete',
-          data: migratedData
-        });
-      }
+      this.postNotesToWebview('migrationComplete', migratedData);
 
       this.updateStatusBar('$(check) Notes migrated to file storage');
       setTimeout(() => this.updateStatusBar(''), 3000);
@@ -393,132 +446,128 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
   }
 
   /**
-   * Handle bookmark toggle request from webview
-   * @param pageIndex - Index of the page to bookmark
-   * @param value - Optional explicit value; if omitted, toggles current state
-   */
-  private async handleToggleBookmark(pageIndex: number, value?: boolean): Promise<void> {
-    try {
-      const updatedNotes = await this.storageService.toggleBookmark(pageIndex, value);
-
-      if (updatedNotes && this._view) {
-        // Send updated notes data back to webview
-        this._view.webview.postMessage({
-          type: 'bookmarkToggled',
-          data: updatedNotes
-        });
-
-        const bookmarkState = updatedNotes.bookmarks?.[pageIndex] ? 'bookmarked' : 'unbookmarked';
-        console.log(`[WebviewProvider] Page ${pageIndex + 1} ${bookmarkState}`);
-      }
-    } catch (error) {
-      console.error('Failed to toggle bookmark:', error);
-      vscode.window.showErrorMessage(`Failed to toggle bookmark: ${error}`);
-    }
-  }
-
-  /**
-   * Handle bulk set of bookmark values from the webview
-   */
-  private async handleBulkSetBookmarks(indices: number[], value: boolean): Promise<void> {
-    try {
-      const updatedNotes = await this.storageService.setBookmarks(indices, value);
-      if (updatedNotes && this._view) {
-        this._view.webview.postMessage({ type: 'bookmarkToggled', data: updatedNotes });
-      }
-    } catch (error) {
-      console.error('Failed to bulk update bookmarks:', error);
-      vscode.window.showErrorMessage(`Failed to update bookmarks: ${error}`);
-    }
-  }
-
-  /**
    * Handle external file changes (e.g., from SyncThing)
    */
   private async handleExternalFileChange(): Promise<void> {
     console.log('[WebviewProvider] External file change detected');
-    
-    if (!this._view) {
+
+    if (!this._view || this.conflictPromptOpen) {
       return;
     }
 
-    const config = getConfig();
-    
-    if (config.sync.autoReloadOnExternalChange) {
+    if (getConfig().sync.autoReloadOnExternalChange) {
       // Auto-reload without prompting
       console.log('[WebviewProvider] Auto-reloading notes due to external change');
       await this.handleLoadNotes();
       vscode.window.showInformationMessage('Notes reloaded from external changes');
-    } else {
-      // Notify user and offer to reload
-      const choice = await vscode.window.showInformationMessage(
-        'Notes file was modified externally. Reload to see changes?',
+      return;
+    }
+
+    // Until the user chooses, saves keep failing the conflict check, so the external
+    // version can't be overwritten by an auto-save in the meantime.
+    this.conflictPromptOpen = true;
+    try {
+      const choice = await vscode.window.showWarningMessage(
+        'Notes file was changed outside this window (e.g. by a sync tool). Your edits are not saved until you choose.',
         'Reload',
-        'Ignore'
+        'Keep Mine'
       );
 
       if (choice === 'Reload') {
         console.log('[WebviewProvider] User chose to reload notes');
         await this.handleLoadNotes();
+      } else if (choice === 'Keep Mine') {
+        await this.keepLocalVersion();
       }
+      // Dismissed: stays unresolved, the next save asks again
+    } catch (error) {
+      console.error('[WebviewProvider] Error handling external change:', error);
+      vscode.window.showErrorMessage(`Failed to handle external change: ${error}`);
+    } finally {
+      this.conflictPromptOpen = false;
+    }
+  }
+
+  /**
+   * Overwrite the externally changed file with the webview's current notes.
+   * The overwritten version is copied to the backup folder first.
+   */
+  private async keepLocalVersion(): Promise<void> {
+    await this.enqueueWrite(async () => {
+      await this.storageService.createBackup();
+      await this.storageService.acknowledgeExternalChange();
+    });
+
+    // The webview saves its latest state, which may be newer than the save that hit the conflict
+    if (this._view) {
+      this._view.webview.postMessage({ type: 'requestSave' });
     }
   }
 
   /**
    * Handle save conflicts
    */
-  private async handleSaveConflict(localData: NotesData, externalIsNewer: boolean): Promise<void> {
-    const remoteData = await this.storageService.loadNotes();
-    
-    if (!remoteData) {
-      // No remote data, safe to save
-      await this.storageService.saveNotes(localData, true);
-      return;
-    }
+  private async handleSaveConflict(externalIsNewer: boolean): Promise<void> {
+    this.conflictPromptOpen = true;
+    try {
+      // Read without accepting the disk version as base, so saves keep failing until resolved
+      const remoteData = await this.storageService.readNotesFromDisk();
 
-    const message = externalIsNewer 
-      ? 'A newer version of notes exists. How would you like to proceed?'
-      : 'Notes file was modified by another device. How would you like to proceed?';
+      if (!remoteData) {
+        // File is gone or unreadable: nothing to merge, keep ours (saveNotes backs up what's there)
+        await this.keepLocalVersion();
+        return;
+      }
 
-    const choice = await vscode.window.showWarningMessage(
-      message,
-      'Use My Version',
-      'Use Other Version',
-      'Merge',
-      'Cancel'
-    );
+      const message = externalIsNewer
+        ? 'A newer version of notes exists. How would you like to proceed?'
+        : 'Notes file was modified by another device. How would you like to proceed?';
 
-    switch (choice) {
-      case 'Use My Version':
-        await this.storageService.saveNotes(localData, true);
-        vscode.window.showInformationMessage('Your version has been saved.');
-        break;
-      
-      case 'Use Other Version':
-        if (this._view) {
-          this._view.webview.postMessage({
-            type: 'notesLoaded',
-            data: remoteData
+      const choice = await vscode.window.showWarningMessage(
+        message,
+        'Use My Version',
+        'Use Other Version',
+        'Merge',
+        'Cancel'
+      );
+
+      switch (choice) {
+        case 'Use My Version':
+          await this.keepLocalVersion();
+          vscode.window.showInformationMessage('Keeping your version. The other version was copied to the backups.');
+          break;
+
+        case 'Use Other Version':
+          await this.handleLoadNotes();
+          vscode.window.showInformationMessage('Loaded the other version.');
+          break;
+
+        case 'Merge': {
+          const localData = this.pendingLocalData;
+          if (!localData) {
+            break;
+          }
+
+          await this.enqueueWrite(async () => {
+            const diskData = (await this.storageService.readNotesFromDisk()) || remoteData;
+            const merged = await this.storageService.mergeNotes(localData, diskData);
+            await this.storageService.saveNotes(merged, true);
+            this.pendingLocalData = undefined;
+            this.postNotesToWebview('notesLoaded', merged);
           });
+          vscode.window.showInformationMessage('Notes have been merged.');
+          break;
         }
-        vscode.window.showInformationMessage('Loaded the other version.');
-        break;
-      
-      case 'Merge':
-        const merged = await this.storageService.mergeNotes(localData, remoteData);
-        await this.storageService.saveNotes(merged, true);
-        if (this._view) {
-          this._view.webview.postMessage({
-            type: 'notesLoaded',
-            data: merged
-          });
-        }
-        vscode.window.showInformationMessage('Notes have been merged.');
-        break;
-      
-      default:
-        // Cancel - do nothing
-        break;
+
+        default:
+          // Cancel / dismissed - stays unresolved, the next save asks again
+          break;
+      }
+    } catch (error) {
+      console.error('[WebviewProvider] Error resolving save conflict:', error);
+      vscode.window.showErrorMessage(`Failed to resolve conflict: ${error}`);
+    } finally {
+      this.conflictPromptOpen = false;
     }
   }
 
@@ -527,145 +576,125 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
    */
   private async handleSyncThingConflicts(conflictFiles: string[]): Promise<void> {
     console.log(`[WebviewProvider] Handling ${conflictFiles.length} SyncThing conflict file(s)`);
-    
-    const conflictNames = conflictFiles.map((f) => f.split(/[\\/]/).pop()).join(', ');
-    
-    const choice = await vscode.window.showWarningMessage(
-      `SyncThing conflict detected: ${conflictNames}. Resolve now?`,
-      'Resolve',
-      'Ignore'
-    );
 
-    if (choice !== 'Resolve') {
-      console.log('[WebviewProvider] User chose to ignore SyncThing conflicts');
-      return;
-    }
+    this.conflictPromptOpen = true;
+    try {
+      const conflictNames = conflictFiles.map((f) => f.split(/[\\/]/).pop()).join(', ');
 
-    // For each conflict file, let user choose
-    for (const conflictFile of conflictFiles) {
-      const fileName = conflictFile.split(/[\\/]/).pop() || 'unknown';
-      const currentFile = this.storageService.getNotesFilePathPublic();
-      
-      // URIs for both files
-      const currentUri = vscode.Uri.file(currentFile);
-      const conflictUri = vscode.Uri.file(conflictFile);
-      
-      // First, show the diff viewer
-      try {
-        await vscode.commands.executeCommand(
-          'vscode.diff',
-          currentUri,
-          conflictUri,
-          `Current ↔ Conflict: ${fileName}`,
-          { preview: true }
-        );
-        
-        vscode.window.showInformationMessage(
-          'Review the differences, then choose which version to keep.',
-          { modal: false }
-        );
-      } catch (error) {
-        console.error('[WebviewProvider] Failed to open diff viewer:', error);
-      }
-      
-      // Now ask user to choose - with ignoreFocusOut to prevent accidental dismissal
-      const decision = await vscode.window.showQuickPick(
-        [
-          {
-            label: '$(arrow-left) Keep Current Version',
-            value: 'keep',
-            description: 'Keep the current version and discard the conflict file'
-          },
-          {
-            label: '$(arrow-right) Use Conflict Version',
-            value: 'use',
-            description: 'Replace current version with the conflict file'
-          },
-          {
-            label: '$(git-merge) Merge Both Versions',
-            value: 'merge',
-            description: 'Intelligently combine unique pages from both versions'
-          },
-          {
-            label: '$(close) Cancel',
-            value: 'cancel',
-            description: 'Skip this conflict for now'
-          }
-        ],
-        {
-          placeHolder: `Resolve SyncThing Conflict: ${fileName}`,
-          ignoreFocusOut: true // Prevent dismissal by clicking outside
-        }
+      const choice = await vscode.window.showWarningMessage(
+        `SyncThing conflict detected: ${conflictNames}. Resolve now?`,
+        'Resolve',
+        'Ignore'
       );
 
-      if (!decision || decision.value === 'cancel') {
-        console.log('[WebviewProvider] User cancelled conflict resolution');
-        continue;
+      if (choice !== 'Resolve') {
+        console.log('[WebviewProvider] User chose to ignore SyncThing conflicts');
+        return;
       }
 
-      try {
-        if (decision.value === 'merge') {
-          // Load both versions and merge
-          const currentData = await this.storageService.loadNotes();
-          const conflictBuffer = await vscode.workspace.fs.readFile(conflictUri);
-          const conflictData = JSON.parse(Buffer.from(conflictBuffer).toString('utf8'));
-          
-          if (currentData && conflictData) {
-            const merged = await this.storageService.mergeNotes(currentData, conflictData);
-            await this.storageService.saveNotes(merged, true);
-            
-            // Delete conflict file and backup it
-            await this.storageService.resolveSyncThingConflict(conflictFile, false);
-            
-            vscode.window.showInformationMessage(
-              `✓ Merged versions successfully (${merged.pages.length} total pages)`
-            );
-          }
-        } else {
-          await this.storageService.resolveSyncThingConflict(
-            conflictFile,
-            decision.value === 'use'
+      // For each conflict file, let user choose
+      for (const conflictFile of conflictFiles) {
+        const fileName = conflictFile.split(/[\\/]/).pop() || 'unknown';
+        const currentFile = this.storageService.getNotesFilePathPublic();
+
+        // URIs for both files
+        const currentUri = vscode.Uri.file(currentFile);
+        const conflictUri = vscode.Uri.file(conflictFile);
+
+        // First, show the diff viewer
+        try {
+          await vscode.commands.executeCommand(
+            'vscode.diff',
+            currentUri,
+            conflictUri,
+            `Current ↔ Conflict: ${fileName}`,
+            { preview: true }
           );
-          
-          vscode.window.showInformationMessage(
-            decision.value === 'use'
-              ? '✓ Using conflict version'
-              : '✓ Keeping current version'
+
+          vscode.window.showInformationMessage('Review the differences, then choose which version to keep.', {
+            modal: false
+          });
+        } catch (error) {
+          console.error('[WebviewProvider] Failed to open diff viewer:', error);
+        }
+
+        // Now ask user to choose - with ignoreFocusOut to prevent accidental dismissal
+        const decision = await vscode.window.showQuickPick(
+          [
+            {
+              label: '$(arrow-left) Keep Current Version',
+              value: 'keep',
+              description: 'Keep the current version and discard the conflict file'
+            },
+            {
+              label: '$(arrow-right) Use Conflict Version',
+              value: 'use',
+              description: 'Replace current version with the conflict file'
+            },
+            {
+              label: '$(git-merge) Merge Both Versions',
+              value: 'merge',
+              description: 'Keep the pages of both versions (a page edited on both sides appears twice)'
+            },
+            {
+              label: '$(close) Cancel',
+              value: 'cancel',
+              description: 'Skip this conflict for now'
+            }
+          ],
+          {
+            placeHolder: `Resolve SyncThing Conflict: ${fileName}`,
+            ignoreFocusOut: true // Prevent dismissal by clicking outside
+          }
+        );
+
+        if (!decision || decision.value === 'cancel') {
+          console.log('[WebviewProvider] User cancelled conflict resolution');
+          continue;
+        }
+
+        try {
+          await this.enqueueWrite(async () => {
+            if (decision.value === 'merge') {
+              // Load both versions and merge
+              const currentData = await this.storageService.loadNotes();
+              const conflictBuffer = await vscode.workspace.fs.readFile(conflictUri);
+              const conflictData = JSON.parse(Buffer.from(conflictBuffer).toString('utf8'));
+
+              if (currentData && conflictData) {
+                const merged = await this.storageService.mergeNotes(currentData, conflictData);
+                await this.storageService.saveNotes(merged, true);
+
+                // Delete conflict file and backup it
+                await this.storageService.resolveSyncThingConflict(conflictFile, false);
+
+                vscode.window.showInformationMessage(
+                  `✓ Merged versions successfully (${merged.pages.length} total pages)`
+                );
+              }
+            } else {
+              await this.storageService.resolveSyncThingConflict(conflictFile, decision.value === 'use');
+
+              vscode.window.showInformationMessage(
+                decision.value === 'use' ? '✓ Using conflict version' : '✓ Keeping current version'
+              );
+            }
+          });
+        } catch (error) {
+          console.error('[WebviewProvider] Error resolving conflict:', error);
+          vscode.window.showErrorMessage(
+            `Failed to resolve conflict: ${error instanceof Error ? error.message : 'Unknown error'}`
           );
         }
-      } catch (error) {
-        console.error('[WebviewProvider] Error resolving conflict:', error);
-        vscode.window.showErrorMessage(
-          `Failed to resolve conflict: ${error instanceof Error ? error.message : 'Unknown error'}`
-        );
       }
+
+      vscode.window.showInformationMessage('✓ All SyncThing conflicts resolved');
+
+      // Reload notes
+      await this.handleLoadNotes();
+    } finally {
+      this.conflictPromptOpen = false;
     }
-
-    vscode.window.showInformationMessage('✓ All SyncThing conflicts resolved');
-    
-    // Reload notes
-    await this.handleLoadNotes();
-  }
-
-  /**
-   * Schedule auto-save with debouncing
-   */
-  public scheduleAutoSave(notesData: NotesData): void {
-    const config = getConfig();
-
-    if (!config.storage.autoSave) {
-      return;
-    }
-
-    // Clear existing timeout
-    if (this.autoSaveTimeout) {
-      clearTimeout(this.autoSaveTimeout);
-    }
-
-    // Schedule new save
-    this.autoSaveTimeout = setTimeout(async () => {
-      await this.handleSaveNotes(notesData);
-    }, config.storage.autoSaveInterval);
   }
 
   /**
@@ -724,7 +753,7 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
 
       // Confirm restoration
       const confirm = await vscode.window.showWarningMessage(
-        `Are you sure you want to restore from backup "${selected.label}"? This will overwrite your current notes.`,
+        `Are you sure you want to restore from backup "${selected.label}"? This will overwrite your current notes (they are backed up first).`,
         { modal: true },
         'Restore',
         'Cancel'
@@ -734,16 +763,11 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
         return;
       }
 
-      // Restore the backup
-      const restoredData = await this.storageService.restoreFromBackup(selected.backup.path);
-
-      // Notify webview of the restored data
-      if (this._view) {
-        this._view.webview.postMessage({
-          type: 'notesRestored',
-          data: restoredData
-        });
-      }
+      // Restore the backup and notify the webview of the restored data
+      await this.enqueueWrite(async () => {
+        const restoredData = await this.storageService.restoreFromBackup(selected.backup.path);
+        this.postNotesToWebview('notesRestored', restoredData);
+      });
 
       vscode.window.showInformationMessage('Notes restored successfully from backup.');
     } catch (error) {
@@ -753,26 +777,30 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
   }
 
   /**
-   * Open storage folder in file explorer
+   * Show the storage folder in the OS file manager
    */
   public async openStorageFolder(): Promise<void> {
     try {
-      const config = getConfig();
-      let folderPath: string;
+      // Same path the notes are actually stored at (incl. the global-storage fallback)
+      const notesPath = this.storageService.getNotesFilePathPublic();
+      const folderPath = path.dirname(notesPath);
 
-      if (config.storage.location === 'custom' && config.storage.customPath) {
-        folderPath = config.storage.customPath;
-      } else {
-        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-        if (!workspaceFolder) {
-          vscode.window.showErrorMessage('No workspace folder found.');
-          return;
-        }
-        folderPath = vscode.Uri.joinPath(workspaceFolder.uri, '.vscode').fsPath;
+      if (!fs.existsSync(folderPath)) {
+        vscode.window.showInformationMessage(`The notes folder does not exist yet: ${folderPath}`);
+        return;
       }
 
-      const folderUri = vscode.Uri.file(folderPath);
-      await vscode.commands.executeCommand('vscode.openFolder', folderUri, { forceNewWindow: true });
+      if (vscode.env.remoteName && vscode.env.remoteName !== 'wsl') {
+        // revealFileInOS can't show files of a remote SSH/container host (WSL is supported)
+        await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(folderPath), {
+          forceNewWindow: true
+        });
+        return;
+      }
+
+      // Reveal the notes file itself when it exists, so it is selected in the file manager
+      const target = fs.existsSync(notesPath) ? notesPath : folderPath;
+      await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(target));
     } catch (error) {
       console.error('Failed to open storage folder:', error);
       vscode.window.showErrorMessage(`Failed to open storage folder: ${error}`);
@@ -1186,9 +1214,7 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
     // Use a nonce to only allow a specific script to be run.
     const nonce = this._getNonce();
 
-    const config = JSON.stringify({
-      leftMargin: this.config.leftMargin
-    });
+    const config = JSON.stringify(this.getWebviewConfig());
 
     return `<!DOCTYPE html>
 			<html lang="en">
@@ -1383,7 +1409,7 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
         <div id="no-workspace-message" class="no-workspace-container hidden">
           <div class="no-workspace-content">
             <div class="no-workspace-icon">
-              <span class="codicon codicon-folder-opened"></span>              code --install-extension better-sidebar-markdown-notes-1.2.0.vsix
+              <span class="codicon codicon-folder-opened"></span>
             </div>
             <h2>NO NOTES - OPEN A WORKSPACE FIRST</h2>
             <p class="no-workspace-description">
@@ -1407,7 +1433,7 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
             <div class="storage-info">
               <div class="info-section">
                 <h4><span class="codicon codicon-cloud"></span> Workspace Storage (Recommended)</h4>
-                <p>Notes stored in <code>.vscode/workspace-notes.json</code></p>
+                <p>Notes stored in <code>.vscode/sidebar-notes.json</code></p>
                 <ul>
                   <li>✅ Automatic cloud sync (OneDrive, Google Drive, etc.)</li>
                   <li>✅ Project-specific notes</li>
@@ -1448,6 +1474,7 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
         <div id="content">
           <div id="search-highlights" class="search-highlights" aria-hidden="true"></div>
           <textarea id="text-input" name="text-input" placeholder="Start by typing your markdown notes..."></textarea>
+          <div id="editor-syntax" class="editor-syntax" aria-hidden="true"></div>
         </div>
 
         <!-- Bottom toolbar with all action buttons -->
@@ -1502,15 +1529,6 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
           </button>
         </div>
 
-        <script nonce="${nonce}">
-          (function () {
-            const renderElement = document.getElementById('render');
-            const editorElement = document.getElementById('content');
-
-            renderElement.style.paddingLeft = ${this.config.leftMargin === true ? '"20px"' : '"0px"'};
-            editorElement.style.paddingLeft = ${this.config.leftMargin === true ? '"20px"' : '"0px"'};
-          })();
-        </script>
         <script nonce="${nonce}" src="${lodashUri}"></script>
         <script nonce="${nonce}" src="${purifyUri}"></script>
         <script nonce="${nonce}" src="${markedUri}"></script>
@@ -1586,24 +1604,28 @@ export default class SidebarMarkdownNotesProvider implements vscode.WebviewViewP
 
       // Update configuration to use custom location
       const config = vscode.workspace.getConfiguration('better-sidebar-markdown-notes');
-  await config.update('storage.location', 'custom', vscode.ConfigurationTarget.Global);
-  await config.update('storage.customPath', customPath, vscode.ConfigurationTarget.Global);
+      await config.update('storage.location', 'custom', vscode.ConfigurationTarget.Global);
+      await config.update('storage.customPath', customPath, vscode.ConfigurationTarget.Global);
 
       // Show success message
       vscode.window.showInformationMessage(`Notes will now be stored in: ${customPath}`, 'OK');
 
-      // Reload the extension with new configuration
-      this.config = getConfig();
-      this.storageService = new StorageService(this.context);
-
-      // Notify webview that custom location was selected
-      if (this._view) {
-        this._view.webview.postMessage({ type: 'customLocationSelected' });
-      }
-
-      // Load data from new location
-      await this.handleInitialDataRequest();
+      // The configuration listener switches to the new location and loads it. Scheduled here
+      // too in case the settings already had these values and no change event fires.
+      this.scheduleStorageReload();
     }
+  }
+
+  /**
+   * Settings the webview needs (passed in the HTML and re-sent when they change)
+   */
+  private getWebviewConfig() {
+    const config = getConfig();
+    return {
+      leftMargin: config.leftMargin,
+      autoSave: config.storage.autoSave,
+      autoSaveInterval: config.storage.autoSaveInterval
+    };
   }
 
   private _getNonce() {

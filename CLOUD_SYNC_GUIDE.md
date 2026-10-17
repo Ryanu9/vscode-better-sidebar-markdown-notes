@@ -9,7 +9,7 @@ The Sidebar Markdown Notes extension now supports automatic file-based persisten
 ### ✅ Automatic File-Based Storage
 - Notes are automatically saved to `.vscode/sidebar-notes.json` in your workspace
 - Real-time auto-save with configurable intervals (default: 1 second)
-- Automatic backup creation before each save
+- Automatic backups while saving (at most one every 10 minutes, plus one before any externally changed file is overwritten)
 
 ### ✅ Cloud Synchronization Ready
 - Files stored in `.vscode` folder are automatically synced by most cloud services
@@ -17,7 +17,7 @@ The Sidebar Markdown Notes extension now supports automatic file-based persisten
 - Cross-device synchronization with conflict resolution
 
 ### ✅ Backup & Restore System
-- Automatic backups created before each save
+- Automatic backups while saving (at most one every 10 minutes, plus one before any externally changed file is overwritten)
 - Manual backup creation via command palette
 - Easy restore from backup with date/time selection
 - Configurable backup retention (default: 10 backups)

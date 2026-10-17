@@ -106,7 +106,7 @@ This extension now includes specific features to work gracefully with SyncThing 
 - Pause sync temporarily if making major edits
 
 ### 4. Regular Backups
-- Extension auto-creates backups before each save
+- Extension auto-creates backups while saving (at most one every 10 minutes, plus one before overwriting an externally changed file)
 - Use "Restore from Backup" if conflicts resolved incorrectly
 - Backups stored in `.vscode/sidebar-notes-backups/`
 

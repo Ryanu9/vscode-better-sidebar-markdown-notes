@@ -79,6 +79,51 @@
   z-index: 2;
 }
 
+/* Bold (**text**) in the editor: this layer draws the text on top of the textarea, whose own
+   text is made transparent (it keeps the caret and the selection). Glyph widths must stay
+   exactly the same as in the textarea, so bold is drawn with a stroke rather than a bolder
+   font weight (the UI font is proportional). */
+.editor-syntax {
+  position: absolute;
+  top: 0;
+  left: 0;
+  /* width/height set in JS to match textarea client area exactly */
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 3;
+  box-sizing: border-box;
+  white-space: break-spaces;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  color: var(--vscode-input-foreground);
+}
+
+.editor-syntax .syntax-inner {
+  white-space: inherit;
+  word-break: inherit;
+  overflow-wrap: inherit;
+  /* transform set in JS to mirror textarea scroll */
+  will-change: transform;
+}
+
+.editor-syntax .md-strong {
+  -webkit-text-stroke: 0.04em currentColor;
+}
+
+.editor-syntax .md-marker {
+  opacity: 0.4;
+}
+
+#text-input.syntax-on {
+  color: transparent;
+  caret-color: var(--vscode-input-foreground);
+}
+
+#text-input.syntax-on::selection {
+  color: transparent;
+  background-color: var(--vscode-editor-selectionBackground, rgba(38, 79, 120, 0.6));
+}
+
 /* Mirror layer behind the textarea that shows search highlights */
 .search-highlights {
   position: absolute;

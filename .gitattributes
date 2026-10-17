@@ -1,0 +1,5 @@
+# Normalize line endings: LF in the repo and in the working tree on every OS
+* text=auto eol=lf
+
+*.png binary
+*.vsix binary

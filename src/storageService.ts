@@ -26,11 +26,18 @@ export interface LegacyNotesData {
   version: number;
 }
 
+// Minimum time between automatic (save-triggered) backups. Manual backups and
+// backups taken before overwriting externally changed data are not throttled.
+const AUTO_BACKUP_INTERVAL_MS = 10 * 60 * 1000;
+
 export class StorageService {
   private readonly notesFilename = 'sidebar-notes.json';
   private readonly backupFolder = 'sidebar-notes-backups';
   private deviceId: string;
+  // mtime of the notes file as of our last read/write. 0 means we have never read the file,
+  // so it must not be overwritten without a conflict check.
   private lastKnownModTime: number = 0;
+  private lastAutoBackupAt: number = 0;
   private fileWatcher?: vscode.FileSystemWatcher;
   private suppressFileWatcherEvents: boolean = false;
 
@@ -131,7 +138,8 @@ export class StorageService {
 
       await this.ensureBackupDirectory();
 
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      // Keep milliseconds so two backups in the same second don't overwrite each other
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const backupFileName = `backup-${timestamp}.json`;
       const backupPath = path.join(this.getBackupDirectoryPath(), backupFileName);
 
@@ -147,6 +155,21 @@ export class StorageService {
         return null;
       }
       throw error;
+    }
+  }
+
+  /**
+   * Backup taken as part of a save. Throttled to one per AUTO_BACKUP_INTERVAL_MS so that
+   * frequent auto-saves don't rotate useful history out of the backup folder.
+   */
+  private async createAutoBackup(force: boolean): Promise<void> {
+    if (!force && Date.now() - this.lastAutoBackupAt < AUTO_BACKUP_INTERVAL_MS) {
+      return;
+    }
+
+    const backupPath = await this.createBackup();
+    if (backupPath) {
+      this.lastAutoBackupAt = Date.now();
     }
   }
 
@@ -180,7 +203,7 @@ export class StorageService {
   }
 
   /**
-   * Load notes from file
+   * Load notes from file. The loaded file becomes the base for conflict detection.
    */
   async loadNotes(): Promise<NotesData | null> {
     const notesPath = this.getNotesFilePath();
@@ -205,6 +228,7 @@ export class StorageService {
           // Persist migrated data
           const jsonData = JSON.stringify(migrated, null, 2);
           await fs.promises.writeFile(notesPath, jsonData, 'utf8');
+          this.lastKnownModTime = (await fs.promises.stat(notesPath)).mtimeMs;
 
           return migrated;
         } catch (migrateError) {
@@ -213,10 +237,10 @@ export class StorageService {
         }
       }
 
-      const notesData = parsed as NotesData;
+      const notesData = this.normalizeNotesData(parsed);
 
       // Validate the data structure
-      if (!this.isValidNotesData(notesData)) {
+      if (!notesData) {
         throw new Error('Invalid notes data format');
       }
 
@@ -224,15 +248,6 @@ export class StorageService {
       this.lastKnownModTime = stat.mtimeMs;
       if (!notesData.metadata.fileModTime) {
         notesData.metadata.fileModTime = stat.mtimeMs;
-      }
-
-      // Migration: Initialize bookmarks array if it doesn't exist
-      // This ensures backward compatibility with notes created before bookmark feature
-      if (!notesData.bookmarks || notesData.bookmarks.length !== notesData.pages.length) {
-        notesData.bookmarks = new Array(notesData.pages.length).fill(false);
-        console.log('[StorageService] Migrated notes to include bookmarks array');
-        // Save the migrated data
-        await this.saveNotes(notesData);
       }
 
       return notesData;
@@ -246,51 +261,104 @@ export class StorageService {
   }
 
   /**
+   * Read the notes file without changing conflict-detection state.
+   * Returns null if the file is missing or not valid notes data.
+   */
+  async readNotesFromDisk(): Promise<NotesData | null> {
+    try {
+      const data = await fs.promises.readFile(this.getNotesFilePath(), 'utf8');
+      return this.normalizeNotesData(JSON.parse(data));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT' || error instanceof SyntaxError) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Validate parsed file data and fill in fields added in later versions
+   */
+  private normalizeNotesData(parsed: any): NotesData | null {
+    if (!this.isValidNotesData(parsed)) {
+      return null;
+    }
+
+    // Notes created before the bookmark feature have no (or a mismatched) bookmarks array.
+    // Fixed in memory only; the next save persists it.
+    if (!parsed.bookmarks || parsed.bookmarks.length !== parsed.pages.length) {
+      parsed.bookmarks = new Array(parsed.pages.length).fill(false);
+    }
+
+    return parsed;
+  }
+
+  private async statNotesFile(): Promise<fs.Stats | null> {
+    try {
+      return await fs.promises.stat(this.getNotesFilePath());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Whether the notes file changed on disk since we last read or wrote it.
+   * Any mtime difference counts: sync tools like SyncThing keep the remote device's mtime,
+   * which can be older than ours.
+   */
+  async hasExternalChange(): Promise<boolean> {
+    const stat = await this.statNotesFile();
+    // A deleted file is simply recreated by the next save
+    return stat !== null && stat.mtimeMs !== this.lastKnownModTime;
+  }
+
+  /**
+   * Accept the file currently on disk as our base so the next save overwrites it.
+   * Only call this after the user chose to keep their own version.
+   */
+  async acknowledgeExternalChange(): Promise<void> {
+    const stat = await this.statNotesFile();
+    this.lastKnownModTime = stat ? stat.mtimeMs : 0;
+  }
+
+  /**
    * Save notes to file
+   * @param skipConflictCheck - overwrite even if the file changed externally (explicit user choice)
    */
   async saveNotes(notesData: NotesData, skipConflictCheck: boolean = false): Promise<void> {
     await this.ensureStorageDirectory();
 
     const notesPath = this.getNotesFilePath();
 
-    // Check for conflicts before saving (unless explicitly skipped)
-    if (!skipConflictCheck && this.lastKnownModTime > 0) {
-      try {
-        const stat = await fs.promises.stat(notesPath);
-        
-        // If file was modified externally since we last read it
-        if (stat.mtimeMs > this.lastKnownModTime) {
-          // File has been modified externally - potential conflict
-          const config = getConfig();
-          
-          if (config.sync.conflictResolution === 'timestamp') {
-            // Auto-resolve: Load the external version and compare timestamps
-            const externalData = await this.loadNotes();
-            
-            if (externalData) {
-              const externalTime = new Date(externalData.lastModified).getTime();
-              const localTime = new Date(notesData.lastModified).getTime();
-              
-              // If external version is newer, don't overwrite
-              if (externalTime > localTime) {
-                throw new Error('CONFLICT_EXTERNAL_NEWER');
-              }
-            }
-          } else {
-            // Manual resolution required
-            throw new Error('CONFLICT_DETECTED');
-          }
-        }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-          // Re-throw if it's not a "file doesn't exist" error
-          throw error;
+    // Also true when the file exists but we never read it (lastKnownModTime === 0),
+    // so a file we haven't seen is never silently overwritten.
+    const existing = await this.statNotesFile();
+    const changedExternally = existing !== null && existing.mtimeMs !== this.lastKnownModTime;
+
+    if (changedExternally && !skipConflictCheck) {
+      if (getConfig().sync.conflictResolution !== 'timestamp') {
+        // Manual resolution required
+        throw new Error('CONFLICT_DETECTED');
+      }
+
+      // Auto-resolve: only overwrite if our data is newer. Read without updating
+      // lastKnownModTime so a rejected save keeps detecting the conflict.
+      const externalData = await this.readNotesFromDisk();
+      if (externalData) {
+        const externalTime = new Date(externalData.lastModified).getTime();
+        const localTime = new Date(notesData.lastModified).getTime();
+
+        if (externalTime > localTime) {
+          throw new Error('CONFLICT_EXTERNAL_NEWER');
         }
       }
     }
 
-    // Create backup before saving
-    await this.createBackup();
+    // Always keep a copy of data we are about to overwrite without having seen it
+    await this.createAutoBackup(changedExternally);
 
     // Update metadata
     notesData.lastModified = new Date().toISOString();
@@ -299,7 +367,7 @@ export class StorageService {
 
     const jsonData = JSON.stringify(notesData, null, 2);
     await fs.promises.writeFile(notesPath, jsonData, 'utf8');
-    
+
     // Update our last known modification time
     const stat = await fs.promises.stat(notesPath);
     this.lastKnownModTime = stat.mtimeMs;
@@ -382,76 +450,18 @@ export class StorageService {
    */
   async restoreFromBackup(backupPath: string): Promise<NotesData> {
     const data = await fs.promises.readFile(backupPath, 'utf8');
-    const notesData = JSON.parse(data) as NotesData;
+    const notesData = this.normalizeNotesData(JSON.parse(data));
 
-    if (!this.isValidNotesData(notesData)) {
+    if (!notesData) {
       throw new Error('Invalid backup data format');
     }
 
-    // Save the restored data as current notes
-    await this.saveNotes(notesData);
+    // Keep the current notes so the restore itself can be undone
+    await this.createBackup();
 
-    return notesData;
-  }
+    // Save the restored data as current notes (explicit user choice, so overwrite)
+    await this.saveNotes(notesData, true);
 
-  /**
-   * Toggle bookmark state for a specific note page
-   * @param pageIndex - Index of the page to bookmark (0-based)
-   * @param value - Optional explicit value; if omitted, toggles current state
-   * @returns Updated NotesData or null if operation failed
-   */
-  async toggleBookmark(pageIndex: number, value?: boolean): Promise<NotesData | null> {
-    const notesData = await this.loadNotes();
-
-    if (!notesData) {
-      console.warn('[StorageService] No notes data found for bookmark toggle');
-      return null;
-    }
-
-    // Ensure bookmarks array exists and has correct length
-    if (!notesData.bookmarks || notesData.bookmarks.length !== notesData.pages.length) {
-      notesData.bookmarks = new Array(notesData.pages.length).fill(false);
-    }
-
-    // Validate page index
-    if (pageIndex < 0 || pageIndex >= notesData.pages.length) {
-      console.warn(`[StorageService] Invalid page index: ${pageIndex}`);
-      return null;
-    }
-
-    // Toggle or set bookmark value
-    notesData.bookmarks[pageIndex] = value !== undefined ? value : !notesData.bookmarks[pageIndex];
-
-    console.log(`[StorageService] Bookmark toggled for page ${pageIndex}: ${notesData.bookmarks[pageIndex]}`);
-
-    // Save updated notes
-    await this.saveNotes(notesData);
-
-    return notesData;
-  }
-
-  /**
-   * Set bookmark state for multiple indices at once
-   */
-  async setBookmarks(indices: number[], value: boolean): Promise<NotesData | null> {
-    const notesData = await this.loadNotes();
-
-    if (!notesData) {
-      console.warn('[StorageService] No notes data found for bulk bookmark toggle');
-      return null;
-    }
-
-    if (!notesData.bookmarks || notesData.bookmarks.length !== notesData.pages.length) {
-      notesData.bookmarks = new Array(notesData.pages.length).fill(false);
-    }
-
-    indices.forEach((idx) => {
-      if (idx >= 0 && idx < notesData.pages.length) {
-        notesData.bookmarks![idx] = value;
-      }
-    });
-
-    await this.saveNotes(notesData);
     return notesData;
   }
 
@@ -483,60 +493,42 @@ export class StorageService {
    */
   setupFileWatcher(onExternalChange: () => void): void {
     const notesPath = this.getNotesFilePath();
-    
+
     // Dispose existing watcher if any
     if (this.fileWatcher) {
       this.fileWatcher.dispose();
     }
 
-    // Create a new file watcher
+    // A RelativePattern is required to watch files outside the workspace folders
+    // (custom storage path or global storage); a plain string glob only matches inside them.
     this.fileWatcher = vscode.workspace.createFileSystemWatcher(
-      notesPath,
-      false, // Don't ignore create events
-      false, // Don't ignore change events
-      false // Don't ignore delete events
+      new vscode.RelativePattern(path.dirname(notesPath), path.basename(notesPath))
     );
 
-    // Watch for changes
-    this.fileWatcher.onDidChange(async (uri) => {
+    const handleEvent = async (kind: string) => {
       if (this.suppressFileWatcherEvents) {
-        console.log('[StorageService] File change event suppressed (internal operation)');
+        console.log(`[StorageService] File ${kind} event suppressed (internal operation)`);
         return;
       }
-      
+
       try {
-        const stat = await fs.promises.stat(uri.fsPath);
-        
-        // Only trigger if this is truly an external change
-        if (stat.mtimeMs > this.lastKnownModTime) {
-          console.log('[StorageService] External file change detected');
-          this.lastKnownModTime = stat.mtimeMs;
+        // Our own saves update lastKnownModTime, so they don't count as external.
+        // lastKnownModTime is deliberately NOT updated here: the change stays "unseen" until
+        // the user reloads or chooses to keep their version, which keeps saveNotes from
+        // silently overwriting it in the meantime.
+        if (await this.hasExternalChange()) {
+          console.log(`[StorageService] External file ${kind} detected`);
           onExternalChange();
         }
       } catch (error) {
         console.warn('[StorageService] Error handling file change:', error);
       }
-    });
+    };
 
-    this.fileWatcher.onDidCreate(async () => {
-      if (this.suppressFileWatcherEvents) {
-        console.log('[StorageService] File create event suppressed (internal operation)');
-        return;
-      }
-      
-      console.log('[StorageService] Notes file created externally');
-      onExternalChange();
-    });
-
-    this.fileWatcher.onDidDelete(() => {
-      if (this.suppressFileWatcherEvents) {
-        console.log('[StorageService] File delete event suppressed (internal operation)');
-        return;
-      }
-      
-      console.log('[StorageService] Notes file deleted externally');
-      onExternalChange();
-    });
+    this.fileWatcher.onDidChange(() => handleEvent('change'));
+    this.fileWatcher.onDidCreate(() => handleEvent('create'));
+    // Deletion needs no prompt: the next save recreates the file
+    this.fileWatcher.onDidDelete(() => console.log('[StorageService] Notes file deleted externally'));
   }
 
   /**
